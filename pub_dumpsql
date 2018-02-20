@@ -1,0 +1,2140 @@
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 10.1
+-- Dumped by pg_dump version 10.1
+
+-- Started on 2018-02-20 09:46:37
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+SET row_security = off;
+
+SET search_path = public, pg_catalog;
+
+--
+-- TOC entry 260 (class 1255 OID 16961)
+-- Name: checkforbaselinedata(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION checkforbaselinedata() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+   BEGIN
+      IF ( TG_OP = 'UPDATE')
+      THEN
+          IF (old.total_planned_hours is not null) OR
+             (old.total_planned_units is not null) OR
+             (old.planned_start is not null) OR
+             (old.planned_end is not null)
+          THEN
+             new.total_planned_hours = old.total_planned_hours;
+             new.total_planned_units = old.total_planned_units;
+             new.planned_start = old.planned_start;
+             new.planned_end = old.planned_end;
+          END IF;
+          RETURN NEW;
+      ELSIF (TG_OP = 'DELETE') 
+      THEN
+          RETURN NULL;
+      END IF;
+END; $$;
+
+
+ALTER FUNCTION public.checkforbaselinedata() OWNER TO postgres;
+
+--
+-- TOC entry 258 (class 1255 OID 17058)
+-- Name: insert_activity_data(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION insert_activity_data() RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    INSERT INTO public.activity_data (activity_id, date)
+      SELECT act.id, tact.date
+      FROM public.activities as act,
+             temp.activity_data as tact
+     WHERE UPPER(act.name) = UPPER(tact.activity_name)
+       AND 1 not in ( SELECT 1 
+                        FROM public.activity_data as adata
+                       WHERE act.id = adata.activity_id
+                         AND UPPER(act.name) = UPPER(tact.activity_name)
+                         AND adata.date = tact.date ) ;
+                         
+END; $$;
+
+
+ALTER FUNCTION public.insert_activity_data() OWNER TO postgres;
+
+--
+-- TOC entry 267 (class 1255 OID 17056)
+-- Name: update_baseline_activities(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION update_baseline_activities() RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    UPDATE public.activities act
+       SET total_planned_hours = t.total_planned_hours,
+           total_planned_units = t.total_planned_units,
+           planned_start = t.planned_start,
+           planned_end = t.planned_end
+      FROM ( SELECT tact.name, unit.id as unit_id, cntrs.id as contractor_id, proj.id as project_id,
+                    tact.total_planned_hours, tact.total_planned_units, tact.planned_start, 
+                    tact.planned_end
+               FROM temp.activities as tact
+              INNER JOIN public.units as unit on tact.unit_name = unit.name
+              INNER JOIN public.contractors as cntrs on cntrs.name = tact.contractor_name
+              INNER JOIN public.projects as proj on proj.name = tact.project_name ) as t
+     WHERE UPPER(t.name) = UPPER(act.name)
+       AND t.unit_id = act.unit_id
+       AND t.contractor_id = act.contractor_id
+       AND t.project_id = act.project_id;
+END; $$;
+
+
+ALTER FUNCTION public.update_baseline_activities() OWNER TO postgres;
+
+--
+-- TOC entry 261 (class 1255 OID 17059)
+-- Name: update_baseline_activity_data(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION update_baseline_activity_data() RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+
+    PERFORM insert_activity_data();
+    
+    UPDATE public.activity_data act
+       SET planned_hours = t.planned_hours,
+           planned_units = t.planned_units,
+           created = current_timestamp(2)
+      FROM ( SELECT pact.id, tact.date, tact.planned_hours, 
+                    tact.planned_units
+               FROM public.activities as pact,
+                    temp.activity_data as tact
+              WHERE UPPER(pact.name) = UPPER(tact.activity_name)
+            ) as t
+     WHERE t.id= act.activity_id
+       AND t.date = act.date;
+END; $$;
+
+
+ALTER FUNCTION public.update_baseline_activity_data() OWNER TO postgres;
+
+--
+-- TOC entry 264 (class 1255 OID 17057)
+-- Name: update_production_activities(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION update_production_activities() RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    UPDATE public.activities act
+       SET actual_start= t.actual_start,
+           actual_end = t.actual_end
+      FROM ( SELECT tact.name, unit.id as unit_id, cntrs.id as contractor_id, proj.id as project_id,
+                    tact.actual_start, tact.actual_end
+               FROM temp.activities as tact
+              INNER JOIN public.units as unit on tact.unit_name = unit.name
+              INNER JOIN public.contractors as cntrs on cntrs.name = tact.contractor_name
+              INNER JOIN public.projects as proj on proj.name = tact.project_name ) as t
+     WHERE UPPER(t.name) = UPPER(act.name)
+       AND t.unit_id = act.unit_id
+       AND t.contractor_id = act.contractor_id
+       AND t.project_id = act.project_id;
+END; $$;
+
+
+ALTER FUNCTION public.update_production_activities() OWNER TO postgres;
+
+--
+-- TOC entry 256 (class 1255 OID 17060)
+-- Name: update_production_activity_data(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION update_production_activity_data() RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    UPDATE public.activity_data act
+       SET actual_hours = t.actual_hours,
+           actual_units = t.actual_units,
+           updated = current_timestamp(2)
+      FROM ( SELECT pact.id, tact.date, tact.actual_hours, 
+                    tact.actual_units
+               FROM public.activities as pact,
+                    temp.activity_data as tact
+              WHERE UPPER(pact.name) = UPPER(tact.activity_name)
+            ) as t
+     WHERE t.id= act.activity_id
+       AND t.date = act.date;
+END; $$;
+
+
+ALTER FUNCTION public.update_production_activity_data() OWNER TO postgres;
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- TOC entry 215 (class 1259 OID 16703)
+-- Name: activities; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE activities (
+    id integer NOT NULL,
+    name text,
+    unit_id integer,
+    contractor_id integer,
+    unit_cost double precision,
+    total_planned_hours integer,
+    project_id integer,
+    total_planned_units bigint,
+    planned_start date,
+    planned_end date,
+    unit_name text,
+    actual_start date,
+    actual_end date,
+    hourly_cost double precision,
+    required_activities integer[]
+);
+
+
+ALTER TABLE activities OWNER TO postgres;
+
+--
+-- TOC entry 216 (class 1259 OID 16710)
+-- Name: activity_data; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE activity_data (
+    id integer NOT NULL,
+    activity_id integer NOT NULL,
+    date date,
+    actual_hours integer,
+    actual_units integer,
+    planned_hours bigint,
+    planned_units double precision,
+    updated timestamp(6) without time zone,
+    created timestamp(6) without time zone
+);
+
+
+ALTER TABLE activity_data OWNER TO postgres;
+
+--
+-- TOC entry 221 (class 1259 OID 16737)
+-- Name: contractors; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE contractors (
+    name text,
+    email text,
+    phone text,
+    pm_contact character varying,
+    id smallint NOT NULL
+);
+
+
+ALTER TABLE contractors OWNER TO postgres;
+
+--
+-- TOC entry 238 (class 1259 OID 16836)
+-- Name: projects; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE projects (
+    id integer DEFAULT nextval(('public.projects_id_seq'::text)::regclass) NOT NULL,
+    name text,
+    start date,
+    "end" date,
+    workdays json,
+    budget integer,
+    bundle_title text,
+    location_id integer,
+    contingency bigint
+);
+
+
+ALTER TABLE projects OWNER TO postgres;
+
+--
+-- TOC entry 250 (class 1259 OID 17378)
+-- Name: activities_activity_data; Type: VIEW; Schema: public; Owner: postgres
+--
+
+CREATE VIEW activities_activity_data AS
+ SELECT proj.id AS proj_id,
+    proj.name AS proj_name,
+    proj.start AS proj_start,
+    proj."end" AS proj_end,
+    act.id AS activity_id,
+    act.name AS activity_name,
+    act.unit_id,
+    act.unit_name,
+    act.planned_start AS activity_pl_start,
+    act.planned_end AS activity_pl_end,
+    act.actual_start AS activity_act_start,
+    act.actual_end AS activity_act_end,
+    act.contractor_id,
+    con.name AS contractor_name,
+    act_data.id AS activity_data_id,
+    act_data.date AS activitiy_data_date,
+    act_data.planned_hours AS act_data_pl_hrs,
+    act_data.planned_units AS act_data_pl_units,
+    act_data.actual_hours AS act_data_act_hrs,
+    act_data.actual_units AS act_data_act_units
+   FROM (((activities act
+     FULL JOIN projects proj ON ((proj.id = act.project_id)))
+     LEFT JOIN contractors con ON ((con.id = act.contractor_id)))
+     LEFT JOIN activity_data act_data ON ((act_data.activity_id = act.id)));
+
+
+ALTER TABLE activities_activity_data OWNER TO postgres;
+
+--
+-- TOC entry 197 (class 1259 OID 16656)
+-- Name: activities_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE activities_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE activities_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3122 (class 0 OID 0)
+-- Dependencies: 197
+-- Name: activities_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE activities_id_seq OWNED BY activities.id;
+
+
+--
+-- TOC entry 198 (class 1259 OID 16658)
+-- Name: activity_data_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE activity_data_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE activity_data_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3123 (class 0 OID 0)
+-- Dependencies: 198
+-- Name: activity_data_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE activity_data_id_seq OWNED BY activity_data.id;
+
+
+--
+-- TOC entry 217 (class 1259 OID 16715)
+-- Name: bundle_activities; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE bundle_activities (
+    bundle_id integer,
+    activity_id integer,
+    id smallint NOT NULL
+);
+
+
+ALTER TABLE bundle_activities OWNER TO postgres;
+
+--
+-- TOC entry 199 (class 1259 OID 16660)
+-- Name: bundle_activities_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE bundle_activities_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    MAXVALUE 2147483647
+    CACHE 1;
+
+
+ALTER TABLE bundle_activities_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 200 (class 1259 OID 16662)
+-- Name: bundle_activities_id_seq1; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE bundle_activities_id_seq1
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE bundle_activities_id_seq1 OWNER TO postgres;
+
+--
+-- TOC entry 3124 (class 0 OID 0)
+-- Dependencies: 200
+-- Name: bundle_activities_id_seq1; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE bundle_activities_id_seq1 OWNED BY bundle_activities.id;
+
+
+--
+-- TOC entry 201 (class 1259 OID 16664)
+-- Name: bundle_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE bundle_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    MAXVALUE 2147483647
+    CACHE 1;
+
+
+ALTER TABLE bundle_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 218 (class 1259 OID 16719)
+-- Name: bundle_phases; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE bundle_phases (
+    id smallint NOT NULL,
+    bundle_id integer,
+    phase_id integer
+);
+
+
+ALTER TABLE bundle_phases OWNER TO postgres;
+
+--
+-- TOC entry 202 (class 1259 OID 16666)
+-- Name: bundle_phases_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE bundle_phases_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE bundle_phases_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3125 (class 0 OID 0)
+-- Dependencies: 202
+-- Name: bundle_phases_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE bundle_phases_id_seq OWNED BY bundle_phases.id;
+
+
+--
+-- TOC entry 219 (class 1259 OID 16723)
+-- Name: bundles; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE bundles (
+    id integer DEFAULT nextval(('public.bundle_id_seq'::text)::regclass) NOT NULL,
+    parent_bundle_id integer,
+    name text,
+    project_id integer,
+    title text,
+    phase_id integer
+);
+
+
+ALTER TABLE bundles OWNER TO postgres;
+
+--
+-- TOC entry 220 (class 1259 OID 16730)
+-- Name: change_orders; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE change_orders (
+    id integer DEFAULT nextval(('public.change_orders'::text)::regclass) NOT NULL,
+    project_id integer,
+    contractor_id integer,
+    description text,
+    approved_cost double precision,
+    estimted_cost double precision,
+    date_submitted date,
+    date_approved date,
+    percent_complete double precision
+);
+
+
+ALTER TABLE change_orders OWNER TO postgres;
+
+--
+-- TOC entry 203 (class 1259 OID 16668)
+-- Name: contractors_id_seq1; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE contractors_id_seq1
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE contractors_id_seq1 OWNER TO postgres;
+
+--
+-- TOC entry 3126 (class 0 OID 0)
+-- Dependencies: 203
+-- Name: contractors_id_seq1; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE contractors_id_seq1 OWNED BY contractors.id;
+
+
+--
+-- TOC entry 248 (class 1259 OID 17302)
+-- Name: file_storage; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE file_storage (
+    load_type text,
+    filename text,
+    filedata bytea,
+    updated timestamp(6) without time zone
+);
+
+
+ALTER TABLE file_storage OWNER TO postgres;
+
+--
+-- TOC entry 222 (class 1259 OID 16744)
+-- Name: incident_classes; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE incident_classes (
+    id integer NOT NULL,
+    name text
+);
+
+
+ALTER TABLE incident_classes OWNER TO postgres;
+
+--
+-- TOC entry 223 (class 1259 OID 16751)
+-- Name: incident_types; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE incident_types (
+    id integer NOT NULL,
+    name text
+);
+
+
+ALTER TABLE incident_types OWNER TO postgres;
+
+--
+-- TOC entry 224 (class 1259 OID 16758)
+-- Name: incidents; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE incidents (
+    id integer NOT NULL,
+    date date,
+    contractor_id integer,
+    incident_type_id integer,
+    incident_class_id integer,
+    project_id integer
+);
+
+
+ALTER TABLE incidents OWNER TO postgres;
+
+--
+-- TOC entry 204 (class 1259 OID 16670)
+-- Name: incidents_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE incidents_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE incidents_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3127 (class 0 OID 0)
+-- Dependencies: 204
+-- Name: incidents_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE incidents_id_seq OWNED BY incidents.id;
+
+
+--
+-- TOC entry 225 (class 1259 OID 16762)
+-- Name: indirect_costs; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE indirect_costs (
+    id integer NOT NULL,
+    actual_amount double precision,
+    planned_amount integer,
+    project_id integer
+);
+
+
+ALTER TABLE indirect_costs OWNER TO postgres;
+
+--
+-- TOC entry 226 (class 1259 OID 16765)
+-- Name: installations; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE installations (
+    id integer DEFAULT nextval(('public.installations'::text)::regclass) NOT NULL,
+    item_id integer,
+    date_installed date,
+    units_installed integer,
+    units_failed integer
+);
+
+
+ALTER TABLE installations OWNER TO postgres;
+
+--
+-- TOC entry 227 (class 1259 OID 16769)
+-- Name: invoices; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE invoices (
+    id integer NOT NULL,
+    activity_id integer,
+    amount double precision,
+    date_invoiced date
+);
+
+
+ALTER TABLE invoices OWNER TO postgres;
+
+--
+-- TOC entry 228 (class 1259 OID 16772)
+-- Name: issue_statuses; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE issue_statuses (
+    id integer NOT NULL,
+    name text
+);
+
+
+ALTER TABLE issue_statuses OWNER TO postgres;
+
+--
+-- TOC entry 229 (class 1259 OID 16779)
+-- Name: issues; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE issues (
+    id integer NOT NULL,
+    name text,
+    responsible text,
+    description text,
+    status text,
+    resolution text,
+    deadline date,
+    updated_by text,
+    updated date,
+    activity_id integer,
+    issue_status_id integer
+);
+
+
+ALTER TABLE issues OWNER TO postgres;
+
+--
+-- TOC entry 230 (class 1259 OID 16786)
+-- Name: items; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE items (
+    id integer NOT NULL,
+    name character varying(100)
+);
+
+
+ALTER TABLE items OWNER TO postgres;
+
+--
+-- TOC entry 231 (class 1259 OID 16789)
+-- Name: locations; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE locations (
+    id integer DEFAULT nextval(('public.locations_id_seq'::text)::regclass) NOT NULL,
+    street text,
+    city text,
+    state text,
+    country text,
+    latitude double precision,
+    longitude double precision
+);
+
+
+ALTER TABLE locations OWNER TO postgres;
+
+--
+-- TOC entry 205 (class 1259 OID 16672)
+-- Name: locations_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE locations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    MAXVALUE 2147483647
+    CACHE 1;
+
+
+ALTER TABLE locations_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 232 (class 1259 OID 16796)
+-- Name: milestones; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE milestones (
+    name text,
+    actual date,
+    planned date,
+    contract date,
+    project_id integer,
+    phase_id integer,
+    id smallint NOT NULL
+);
+
+
+ALTER TABLE milestones OWNER TO postgres;
+
+--
+-- TOC entry 206 (class 1259 OID 16674)
+-- Name: milestones_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE milestones_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE milestones_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3128 (class 0 OID 0)
+-- Dependencies: 206
+-- Name: milestones_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE milestones_id_seq OWNED BY milestones.id;
+
+
+--
+-- TOC entry 233 (class 1259 OID 16803)
+-- Name: ncrs; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE ncrs (
+    id integer DEFAULT nextval(('public.ncrs'::text)::regclass) NOT NULL,
+    project_id integer,
+    contractor_id integer,
+    description text,
+    date_open date,
+    date_closed date
+);
+
+
+ALTER TABLE ncrs OWNER TO postgres;
+
+--
+-- TOC entry 207 (class 1259 OID 16676)
+-- Name: new_table_0_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE new_table_0_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE new_table_0_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3129 (class 0 OID 0)
+-- Dependencies: 207
+-- Name: new_table_0_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE new_table_0_id_seq OWNED BY incident_types.id;
+
+
+--
+-- TOC entry 208 (class 1259 OID 16678)
+-- Name: new_table_0_id_seq1; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE new_table_0_id_seq1
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE new_table_0_id_seq1 OWNER TO postgres;
+
+--
+-- TOC entry 3130 (class 0 OID 0)
+-- Dependencies: 208
+-- Name: new_table_0_id_seq1; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE new_table_0_id_seq1 OWNED BY incident_classes.id;
+
+
+--
+-- TOC entry 209 (class 1259 OID 16680)
+-- Name: new_table_0_id_seq2; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE new_table_0_id_seq2
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE new_table_0_id_seq2 OWNER TO postgres;
+
+--
+-- TOC entry 3131 (class 0 OID 0)
+-- Dependencies: 209
+-- Name: new_table_0_id_seq2; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE new_table_0_id_seq2 OWNED BY issues.id;
+
+
+--
+-- TOC entry 210 (class 1259 OID 16682)
+-- Name: new_table_1_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE new_table_1_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE new_table_1_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3132 (class 0 OID 0)
+-- Dependencies: 210
+-- Name: new_table_1_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE new_table_1_id_seq OWNED BY issue_statuses.id;
+
+
+--
+-- TOC entry 234 (class 1259 OID 16810)
+-- Name: phases; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE phases (
+    name text,
+    scheduled_start date,
+    scheduled_end text,
+    actual_start text,
+    actual_end date,
+    id smallint NOT NULL
+);
+
+
+ALTER TABLE phases OWNER TO postgres;
+
+--
+-- TOC entry 211 (class 1259 OID 16684)
+-- Name: phases_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE phases_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE phases_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3133 (class 0 OID 0)
+-- Dependencies: 211
+-- Name: phases_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE phases_id_seq OWNED BY phases.id;
+
+
+--
+-- TOC entry 235 (class 1259 OID 16818)
+-- Name: portfolio_projects; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE portfolio_projects (
+    id integer NOT NULL,
+    portfolio_id integer,
+    project_id integer
+);
+
+
+ALTER TABLE portfolio_projects OWNER TO postgres;
+
+--
+-- TOC entry 212 (class 1259 OID 16686)
+-- Name: portfolio_projects_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE portfolio_projects_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE portfolio_projects_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3134 (class 0 OID 0)
+-- Dependencies: 212
+-- Name: portfolio_projects_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE portfolio_projects_id_seq OWNED BY portfolio_projects.id;
+
+
+--
+-- TOC entry 236 (class 1259 OID 16822)
+-- Name: portfolios; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE portfolios (
+    id integer NOT NULL,
+    name text
+);
+
+
+ALTER TABLE portfolios OWNER TO postgres;
+
+--
+-- TOC entry 213 (class 1259 OID 16688)
+-- Name: portfolios_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE portfolios_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE portfolios_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3135 (class 0 OID 0)
+-- Dependencies: 213
+-- Name: portfolios_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE portfolios_id_seq OWNED BY portfolios.id;
+
+
+--
+-- TOC entry 237 (class 1259 OID 16829)
+-- Name: procurements; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE procurements (
+    id integer DEFAULT nextval(('public.procurements'::text)::regclass) NOT NULL,
+    name text,
+    date_needed date,
+    date_delivered date,
+    project_id integer
+);
+
+
+ALTER TABLE procurements OWNER TO postgres;
+
+--
+-- TOC entry 239 (class 1259 OID 16843)
+-- Name: units; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE units (
+    id integer DEFAULT nextval(('public.units'::text)::regclass) NOT NULL,
+    name text
+);
+
+
+ALTER TABLE units OWNER TO postgres;
+
+--
+-- TOC entry 249 (class 1259 OID 17373)
+-- Name: project_activities; Type: VIEW; Schema: public; Owner: postgres
+--
+
+CREATE VIEW project_activities AS
+ SELECT proj.id AS proj_id,
+    proj.name AS proj_name,
+    proj.start AS proj_start,
+    proj."end" AS proj_end,
+    loc.id AS loc_id,
+    loc.state AS loc_state,
+    act.id AS activity_id,
+    act.name AS activity_name,
+    act.unit_id,
+    unit.name AS unit_name,
+    act.contractor_id,
+    con.name AS contractor_name,
+    bact.id AS bundle_id,
+    bun.name AS bundle_name,
+    ph.id AS phase_id,
+    ph.name AS phase_name
+   FROM ((((((((activities act
+     FULL JOIN projects proj ON ((proj.id = act.project_id)))
+     LEFT JOIN locations loc ON ((loc.id = proj.location_id)))
+     LEFT JOIN units unit ON ((unit.id = act.unit_id)))
+     LEFT JOIN contractors con ON ((con.id = act.contractor_id)))
+     LEFT JOIN bundle_activities bact ON ((bact.activity_id = act.id)))
+     LEFT JOIN bundles bun ON (((bact.id = bun.id) AND (proj.id = bun.project_id))))
+     LEFT JOIN bundle_phases bph ON ((bph.id = bun.id)))
+     LEFT JOIN phases ph ON ((ph.id = bph.phase_id)));
+
+
+ALTER TABLE project_activities OWNER TO postgres;
+
+--
+-- TOC entry 214 (class 1259 OID 16690)
+-- Name: projects_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE projects_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    MAXVALUE 2147483647
+    CACHE 1;
+
+
+ALTER TABLE projects_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 240 (class 1259 OID 16850)
+-- Name: variance_reasons; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE variance_reasons (
+    id integer DEFAULT nextval(('public.variance_reasons'::text)::regclass) NOT NULL,
+    variance_id integer,
+    comment text,
+    created date,
+    updated date
+);
+
+
+ALTER TABLE variance_reasons OWNER TO postgres;
+
+--
+-- TOC entry 241 (class 1259 OID 16857)
+-- Name: variances; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE variances (
+    id integer DEFAULT nextval(('public.variances'::text)::regclass) NOT NULL,
+    activity_id integer,
+    reported_date date,
+    updated_date date
+);
+
+
+ALTER TABLE variances OWNER TO postgres;
+
+--
+-- TOC entry 242 (class 1259 OID 16861)
+-- Name: weightings; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE weightings (
+    id integer DEFAULT nextval(('public.weightings'::text)::regclass) NOT NULL,
+    score text,
+    weighting numeric
+);
+
+
+ALTER TABLE weightings OWNER TO postgres;
+
+--
+-- TOC entry 2870 (class 2604 OID 16706)
+-- Name: activities id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY activities ALTER COLUMN id SET DEFAULT nextval('activities_id_seq'::regclass);
+
+
+--
+-- TOC entry 2871 (class 2604 OID 16713)
+-- Name: activity_data id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY activity_data ALTER COLUMN id SET DEFAULT nextval('activity_data_id_seq'::regclass);
+
+
+--
+-- TOC entry 2872 (class 2604 OID 16718)
+-- Name: bundle_activities id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY bundle_activities ALTER COLUMN id SET DEFAULT nextval('bundle_activities_id_seq1'::regclass);
+
+
+--
+-- TOC entry 2873 (class 2604 OID 16722)
+-- Name: bundle_phases id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY bundle_phases ALTER COLUMN id SET DEFAULT nextval('bundle_phases_id_seq'::regclass);
+
+
+--
+-- TOC entry 2876 (class 2604 OID 16740)
+-- Name: contractors id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY contractors ALTER COLUMN id SET DEFAULT nextval('contractors_id_seq1'::regclass);
+
+
+--
+-- TOC entry 2877 (class 2604 OID 16747)
+-- Name: incident_classes id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY incident_classes ALTER COLUMN id SET DEFAULT nextval('new_table_0_id_seq1'::regclass);
+
+
+--
+-- TOC entry 2878 (class 2604 OID 16754)
+-- Name: incident_types id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY incident_types ALTER COLUMN id SET DEFAULT nextval('new_table_0_id_seq'::regclass);
+
+
+--
+-- TOC entry 2879 (class 2604 OID 16761)
+-- Name: incidents id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY incidents ALTER COLUMN id SET DEFAULT nextval('incidents_id_seq'::regclass);
+
+
+--
+-- TOC entry 2881 (class 2604 OID 16775)
+-- Name: issue_statuses id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY issue_statuses ALTER COLUMN id SET DEFAULT nextval('new_table_1_id_seq'::regclass);
+
+
+--
+-- TOC entry 2882 (class 2604 OID 16782)
+-- Name: issues id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY issues ALTER COLUMN id SET DEFAULT nextval('new_table_0_id_seq2'::regclass);
+
+
+--
+-- TOC entry 2884 (class 2604 OID 16799)
+-- Name: milestones id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY milestones ALTER COLUMN id SET DEFAULT nextval('milestones_id_seq'::regclass);
+
+
+--
+-- TOC entry 2886 (class 2604 OID 16813)
+-- Name: phases id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY phases ALTER COLUMN id SET DEFAULT nextval('phases_id_seq'::regclass);
+
+
+--
+-- TOC entry 2887 (class 2604 OID 16821)
+-- Name: portfolio_projects id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY portfolio_projects ALTER COLUMN id SET DEFAULT nextval('portfolio_projects_id_seq'::regclass);
+
+
+--
+-- TOC entry 2888 (class 2604 OID 16825)
+-- Name: portfolios id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY portfolios ALTER COLUMN id SET DEFAULT nextval('portfolios_id_seq'::regclass);
+
+
+--
+-- TOC entry 3088 (class 0 OID 16703)
+-- Dependencies: 215
+-- Data for Name: activities; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY activities (id, name, unit_id, contractor_id, unit_cost, total_planned_hours, project_id, total_planned_units, planned_start, planned_end, unit_name, actual_start, actual_end, hourly_cost, required_activities) FROM stdin;
+10	DC Pull	3	1	50	\N	1	\N	\N	\N	DC Pulled	\N	\N	\N	\N
+19	Pile Driving	4	4	\N	\N	6	\N	2017-08-14	2017-09-12	\N	2017-08-13	2017-10-02	\N	\N
+1	Combiner Termination	3	1	50	\N	1	\N	\N	\N	Combiner Terminated	\N	\N	\N	\N
+5	Combiner Install	3	1	50	\N	1	\N	\N	\N	Combiner Installed	\N	\N	\N	\N
+6	DC Collection	3	1	50	\N	1	\N	\N	\N	DC Collection INstalled	\N	\N	\N	\N
+7	Combiner Termination	3	1	50	\N	1	\N	\N	\N	Combiner Terminated	\N	\N	\N	\N
+9	CAB Install	3	1	50	\N	1	\N	\N	\N	CAB Installed	\N	\N	\N	\N
+11	Combiner Install	3	1	50	\N	1	\N	\N	\N	Combiner Installed	\N	\N	\N	\N
+12	DC Collection	3	1	50	\N	1	\N	\N	\N	DC Collection INstalled	\N	\N	\N	\N
+4	DC Pull	3	1	50	\N	1	\N	\N	\N	DC Pulled	\N	\N	\N	\N
+2	Module Install	3	1	50	\N	1	\N	\N	\N	Modules  Installed	\N	\N	\N	\N
+3	CAB Install	3	1	50	\N	1	\N	\N	\N	CAB Installed	\N	\N	\N	\N
+8	Module Install	3	1	50	\N	1	\N	\N	\N	Modules  Installed	\N	\N	\N	\N
+13	30% Drawing Set	3	2	\N	\N	1	\N	\N	\N	\N	\N	\N	100	\N
+14	60% Drawing Set	3	2	\N	\N	1	\N	\N	\N	\N	\N	\N	100	\N
+17	Torque Tube Rows Installed	5	5	\N	\N	6	\N	2017-08-31	2017-09-25	\N	2017-08-27	2017-10-10	\N	\N
+18	Tracker Rows Completed	5	5	\N	\N	6	\N	2017-09-01	2017-09-26	\N	2017-08-27	2017-10-10	\N	\N
+\.
+
+
+--
+-- TOC entry 3089 (class 0 OID 16710)
+-- Dependencies: 216
+-- Data for Name: activity_data; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY activity_data (id, activity_id, date, actual_hours, actual_units, planned_hours, planned_units, updated, created) FROM stdin;
+2127	17	2017-08-27	\N	0	\N	0	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2128	17	2017-08-28	\N	0	\N	0	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2129	17	2017-08-29	\N	0	\N	0	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2130	17	2017-08-30	\N	0	\N	50	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2131	17	2017-08-31	\N	0	\N	100	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2132	17	2017-09-01	\N	0	\N	150	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2133	17	2017-09-02	\N	0	\N	150	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2134	17	2017-09-03	\N	0	\N	150	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2135	17	2017-09-04	\N	0	\N	150	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2136	17	2017-09-05	\N	0	\N	200	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2137	17	2017-09-06	\N	0	\N	250	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2138	17	2017-09-07	\N	0	\N	300	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2139	17	2017-09-08	\N	0	\N	350	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2140	17	2017-09-09	\N	0	\N	350	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2141	17	2017-09-10	\N	0	\N	350	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2142	17	2017-09-11	\N	0	\N	400	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2143	17	2017-09-12	\N	0	\N	450	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2144	17	2017-09-13	\N	0	\N	500	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2145	17	2017-09-14	\N	0	\N	550	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2146	17	2017-09-15	\N	0	\N	600	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2147	17	2017-09-16	\N	0	\N	600	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2148	17	2017-09-17	\N	0	\N	600	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2149	17	2017-09-18	\N	0	\N	650	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2150	17	2017-09-19	\N	0	\N	700	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2151	17	2017-09-20	\N	0	\N	750	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2152	17	2017-09-21	\N	75	\N	800	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2153	17	2017-09-21	\N	75	\N	800	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2154	17	2017-09-22	\N	186	\N	850	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2155	17	2017-09-22	\N	186	\N	850	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2156	17	2017-09-23	\N	186	\N	850	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2157	17	2017-09-24	\N	186	\N	850	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2158	17	2017-09-25	\N	313	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2159	17	2017-09-25	\N	313	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2200	18	2017-09-13	\N	0	\N	450	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2201	18	2017-09-14	\N	0	\N	500	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2202	18	2017-09-15	\N	0	\N	550	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2203	18	2017-09-16	\N	0	\N	550	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2204	18	2017-09-17	\N	0	\N	550	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2205	18	2017-09-18	\N	0	\N	600	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2206	18	2017-09-19	\N	0	\N	650	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2207	18	2017-09-20	\N	0	\N	700	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2208	18	2017-09-21	\N	0	\N	750	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2209	18	2017-09-22	\N	0	\N	800	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2210	18	2017-09-23	\N	0	\N	800	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2211	18	2017-09-24	\N	0	\N	800	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2179	17	2017-10-08	\N	848	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2180	17	2017-10-09	\N	870	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2181	17	2017-10-09	\N	870	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2182	17	2017-10-10	\N	870	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2183	18	2017-08-27	\N	0	\N	0	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2184	18	2017-08-28	\N	0	\N	0	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2172	17	2017-10-02	\N	768	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2173	17	2017-10-02	\N	768	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2174	17	2017-10-03	\N	848	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2175	17	2017-10-04	\N	848	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2176	17	2017-10-05	\N	848	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2177	17	2017-10-06	\N	848	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2178	17	2017-10-07	\N	848	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2185	18	2017-08-29	\N	0	\N	0	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2186	18	2017-08-30	\N	0	\N	0	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2187	18	2017-08-31	\N	0	\N	50	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2188	18	2017-09-01	\N	0	\N	100	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2189	18	2017-09-02	\N	0	\N	100	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2190	18	2017-09-03	\N	0	\N	100	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2191	18	2017-09-04	\N	0	\N	100	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2192	18	2017-09-05	\N	0	\N	150	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2193	18	2017-09-06	\N	0	\N	200	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2194	18	2017-09-07	\N	0	\N	250	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2195	18	2017-09-08	\N	0	\N	300	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2196	18	2017-09-09	\N	0	\N	300	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2197	18	2017-09-10	\N	0	\N	300	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2198	18	2017-09-11	\N	0	\N	350	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2199	18	2017-09-12	\N	0	\N	400	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2212	18	2017-09-25	\N	73	\N	850	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2213	18	2017-09-25	\N	73	\N	850	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2214	18	2017-09-26	\N	153	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2215	18	2017-09-27	\N	258	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2216	18	2017-09-27	\N	258	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2217	18	2017-09-28	\N	352	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2218	18	2017-09-28	\N	352	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2219	18	2017-09-29	\N	430	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2220	18	2017-09-29	\N	430	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2221	18	2017-09-30	\N	430	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2222	18	2017-10-01	\N	430	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2223	18	2017-10-02	\N	503	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2224	18	2017-10-02	\N	503	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2225	18	2017-10-02	\N	503	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2226	18	2017-10-03	\N	588	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2227	18	2017-10-03	\N	588	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2228	18	2017-10-04	\N	660	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2229	18	2017-10-04	\N	660	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2230	18	2017-10-04	\N	660	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2231	18	2017-10-05	\N	725	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2232	18	2017-10-05	\N	725	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2233	18	2017-10-05	\N	725	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2234	18	2017-10-06	\N	799	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2235	18	2017-10-06	\N	799	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2236	18	2017-10-07	\N	799	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2237	18	2017-10-08	\N	799	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2238	18	2017-10-09	\N	826	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2170	17	2017-09-30	\N	680	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2171	17	2017-10-01	\N	680	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2239	18	2017-10-10	\N	826	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2160	17	2017-09-25	\N	313	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2161	17	2017-09-26	\N	437	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2162	17	2017-09-26	\N	437	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2163	17	2017-09-26	\N	437	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2164	17	2017-09-27	\N	516	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2165	17	2017-09-27	\N	516	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2166	17	2017-09-28	\N	617	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2167	17	2017-09-28	\N	617	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2168	17	2017-09-29	\N	680	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+2169	17	2017-09-29	\N	680	\N	870	2018-02-20 08:48:25.19	2018-02-16 18:40:57.91
+\.
+
+
+--
+-- TOC entry 3090 (class 0 OID 16715)
+-- Dependencies: 217
+-- Data for Name: bundle_activities; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY bundle_activities (bundle_id, activity_id, id) FROM stdin;
+1	1	1
+1	2	2
+1	3	3
+1	4	4
+1	5	5
+1	6	6
+11	10	7
+12	8	8
+12	11	9
+12	12	10
+11	7	11
+15	13	12
+15	14	13
+\.
+
+
+--
+-- TOC entry 3091 (class 0 OID 16719)
+-- Dependencies: 218
+-- Data for Name: bundle_phases; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY bundle_phases (id, bundle_id, phase_id) FROM stdin;
+1	1	4
+2	13	4
+3	14	4
+4	11	4
+5	12	4
+6	15	2
+\.
+
+
+--
+-- TOC entry 3092 (class 0 OID 16723)
+-- Dependencies: 219
+-- Data for Name: bundles; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY bundles (id, parent_bundle_id, name, project_id, title, phase_id) FROM stdin;
+1	\N	Block 1	1	Block	4
+13	\N	Block 4	2	Block	4
+14	\N	Block 5	2	Block	4
+12	\N	Block 3	1	Block	4
+11	\N	Block 2	1	Block	4
+15	\N	Engineering Activities	1	Activities	2
+17	\N	Mechanical	6	\N	4
+18	\N	Electrical	6	\N	4
+\.
+
+
+--
+-- TOC entry 3093 (class 0 OID 16730)
+-- Dependencies: 220
+-- Data for Name: change_orders; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY change_orders (id, project_id, contractor_id, description, approved_cost, estimted_cost, date_submitted, date_approved, percent_complete) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3094 (class 0 OID 16737)
+-- Dependencies: 221
+-- Data for Name: contractors; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY contractors (name, email, phone, pm_contact, id) FROM stdin;
+Contractor A	info@contractora.com	646-450-0364	\N	1
+Contractor 2	\N	\N	\N	2
+Sacramento Drilling	\N	\N	\N	4
+Arraycon	\N	\N	\N	5
+\.
+
+
+--
+-- TOC entry 3116 (class 0 OID 17302)
+-- Dependencies: 248
+-- Data for Name: file_storage; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY file_storage (load_type, filename, filedata, updated) FROM stdin;
+Structural	struct.xlsx	\N	\N
+Baseline	baseline.xlsx	\N	\N
+Production	C:\\Projects\\Solar CCT\\Bayshore A-Mechanical Tracker v5.xlsx	\\x504b03041400000008000c46544c3ce1a585c0000000160200000b0000005f72656c732f2e72656c73ad924f8bc2400cc5bf4a99fb1a57c1c3623d79e96d59fc027126fd433b932113b17e7b87bd6cb75450f0185ef2de8f47f63f34a0761c52dbc5548c7e08a934ad6afc0248b6258f69c59142566a168f9a476920a2edb121d8acd73b90a98739eca79e45e54a2395fb34c509a5212dcd38c095a53f33f7ab6c9b855ba46742b9ae3b4b47b6174f4117b2671ba6806598cd1f8c63fb2d9c4f2d0bbd86f3b803f0a4e850f1d7f523e60012ed283d24da2e10618cefee8746a5e0c8cd91e0df1b1cee504b03041400000008000c46544c66f30b6082000000b100000010000000646f6350726f70732f6170702e786d6c4d8e4d0bc2301044ff4ae9dd6e29e2416240b047c193f7906e6c20c986cd0af9f9a6821fb779bc61187563cac8e2b1743586544efd2a928f00c5ae184d199a4ecd38e268a4213f809cf3162f649f1193c0348e07c02a98165c76f93bd86b75ce39786bc453d2576f990a39e9e66a3128f8975bf38e5cb63c0dfbb7fcb082df49fd02504b03041400000008000c46544c5e87f2c5280100003c02000011000000646f6350726f70732f636f72652e786d6c8592516bc2301485ff4ae97b4dd2ea8410fbb08d3dc8044161c3b790deb6614d1a924875bf7e69b555d9608f39f79cefdc903061a8682d6c6d6bc07a092e3aa9463b2acc2aaebd371421276a50dccd82438761d95ac57d38da0a192ebe780528c5f80929f0bce09ea31e989889185f91859890e6689b015008040d28d0de213223e8e6f56095fb33304c26e7c9c9c9d575ddaccb065fd888a0cfcdfb6e583e91da79ae05c4392b041516b86f6dbe3e721ded825ec33743770376edbf085044a185fab381553c4e3eb297d7fd5b9ca7982c139c2638db9339c584ceb343cf7ac8df80aa2d6429ff2792342117624a17cb3be208c85978ba863bbfb90acfe77c0d5acb126cb4136d55853b33f4db34e6b656ea7eb54b1d4e08e9ebe6982ec861ca8da64178fc28f90f504b03041400000008000c46544c83afeae3d3050000e31b000013000000786c2f7468656d652f7468656d65312e786d6ced594d6fdb3618be0fd87f20746f65d992eb04758ad8b1dbad4d1b246e871e6999965853a240d2497d1bdae38001c3ba619701bbed306c2bd002bb74bf265b87ad03fa17f6eac336655369d2665887d6016c917ade6fbe8f48e5f295fb1143874448cae3b6e55cac5988c43e1fd138685bb707fd0b2d0b4985e311663c266d6b46a47565ebc30f2ee34d15928820908fe5266e5ba152c9a66d4b1fa6b1bcc81312c3bd311711563014813d12f808f446ccaed76a4d3bc234b6508c23507b6b3ca63e418354a5b53557de63f0152b994ef84c1cf899455d22c38e264efa2367b2cb043ac4ac6d819d113f1a90fbca420c4b0537da562dfb58f6d6657b21c45485ac26d7cf3e855c21309ad43339110c17824edfddb8b4b3d05fcff5afe37abd5eb7e72cf46500ecfb10a9b38675fb2da733d7a981f2cb75dddd9a5773cb784d7f630dbfd1e974bc8d12beb1c4bb6bf856ade96ed74b787789f7d6fdef6c77bbcd12de5be29b6bf8fea58da65bc667a090d178b2864eebb9a8cc0232e6ec9a11de02786bbe0096285b5b5db97cacaad65a84ef71d10740565cac688cd42c2163ec03ae8ba3a1a0d842098eb984895abdd6af35e03bfd73b32b37358f3709d6e4f2295fae4da59e20e90b9aa8b6f53168b534c8cb673fbe7cf604bd7cf6f8f8c1d3e307bf1c3f7c78fce06783e0351c07bae08befbff8fbdb4fd15f4fbe7bf1e82b335eeaf8df7ffaecb75fbf3403950e7cfef5e33f9e3e7efecde77ffef0c800df1678a8c307342212dd2447689f47109bc100198ab3490c424c4b123804a401d85361097873869909d721e5e4dd11400f26e0d5e9bd92af07a1982a6a005e0fa312709773d6e1c218cef5d4961ece340eccc6c554c7ed637c68b2dd5d296d6f9ac03aa72695dd9094dcdc63506d1c90982894dee313420c6277292de57597fa824b3e56e82e451d4c8d2919d0a1320b5da311d4656672104a5dcacdee1dd4e1cca47e871c9691d01098995412564ae3553c5538327a8c23a6236f60159a9c3c9809bf9470a9a0d201611cf546444a93cc2d312bb97b1d034f19cbbecb66511929149d98903730e73a72874fba218e12a3cf340e75ec4772024b14a33dae8c4ef07287a463a8038e2bcb7d871275b6b6be4d83d0bc40d23b53616a09c2cbfd3863634ce282fd4b3c1ed1f824526714587d85d4bdf7a46e26f56d78009a5a6b95caab70ff4302dfc1d3788f40cfbce7eff7fcfd2ef277552f9f3f6b2f89dad6f7e9999aa872d33ea68c1da81923376446f112c21bf561321b64428b334212c26561ae840b04ceae91e0ea13aac283102760c6c92c04b2501d489470090f09ab527776bca5107336e7cdcfa480c66a978ff2e9867e565da8c94681d40d355205a735d6b8f466c69c1c784a6b8e67b6e69d68cdd6b2097d8370fa26c269d673d3b0503023a334efb9827959cebd4432c42352d4c83106e2344e99b6d6abb3a659db68bc99b5d3144937e75698f3cea14ab5b52ad9ebedc8e2f2081d81575eddb3908f93b635861d195c4609e89329556116c46dcb574528af6ce6d580cdcbd2a955065c329108a976b00c73a9ecd6fc554ebcf4bfeeb9691ece2700031b9dce8b46cbf90fbdb0574b4bc663e2ab8a99e5b0b8c7a78a8883707484866c2af631f8ede6ab6b44253c2aeaf381800e758b8557eefca20b565f1915dd815912e282935a5aed737876bdf0211b69eed915bebf66288d730cc57b774349572e6c701ba3ece805db008151ba46db16172ae4c0424948fdbe808d43660bfc42d016a94b88a52fc0535fc9e192b7721d39c905a1daa7011214984e8582903d55c4f90a654e5d7fbece15153cb3705726f9ef901c123648bbb799c66fa170ce26452232dc6ad16c53770d83fe5bbcf3712b763e276f0f9686dcb3ec455c8df4b547c1c69bb970c6476ddd1c71dd3bf5a33681630a4abf80b8a9f0d9727f3be0fb507db4d851225888175a45fb2d2687e0734b0b2e55f5ef6ea396256855d4fb3c379f5ab21b15c93ed9dceb27db33e4da3b39d5f67a8bdada41261badfd238c0fef81ed1d381f4d9992f97ba7fb7028edceff85017aeca5e8d63f504b03041400000008000c46544c51d0fe119e0b0000c04f000018000000786c2f776f726b7368656574732f7368656574312e786d6cad5cdb72a34812fd1585771e765f2cea0a28dc8e906c21e1dd99ee71cfee3eab6d6c2b5a121e84fbb25fbf09141a04994549661ea6654e9279f2d4259392f1d5f734fbba7f49927cf463bbd9ed3f5cbce4f9eb643cde3fbc24dbd5fe327d4d76803ca5d97695c38fd9f378ff9a25abc7f2a6ed66cc3d4f8fb7abf5eee2faaabcf629bbbe4adff2cd7a977cca46fbb7ed7695fd9c259bf4fb870b76515fb85f3fbfe4e585f1f5d5ebea39f99ce4ff7e851b9ed6f91fe927b85083e383d7c7f536d9edd7e96e94254f1f2ea66c12fbb2b4294dfeb34ebeef1b9f47f9eacbe764933ce4c963e9acc8f54b9a7e2dc0182e7917a3ffa5e9f6f3c36a03d102d5f8f1b722df4d79113c964e8ab82bf8e75b72936c00ba5302b2f9b3a4527e3e702dfc373fd7a4a25244c8f1cb6a9fdca49bffae1ff3178871317a4c9e566f9bfc3efdbe4c8c30c0c6a8f8afe45bb201f3923004794837fbf2ffa387b77d9e6e8d1b4870bbfa51fdbbde555ae73f8bcc7808b957465c5d32e969ae6a4fb80f6e7c70cc070b2f03a5a40efc1e2fc27811a817df8989343e24ea433a3251c68b7a07136d7c68dc87fd66dfdcec1382f24031d54b21305e02d44be0284668bc84b8976a225793ac9cb6b7ab7c757d95a5df8dbbc314bd185533f5b288985533ae72b67f5d157b099bc0e7fc65fdf07596963700abc2705a59829270750f57bf5d7b57e36f45586331ab2c84284d76a589141e0b8ecd6e2a33df58956917d76f89eb73e27a445c5f10d797c4f5b8ba1e34ae8f41388b7a9c95d2714cba5aad0a645276d2a991a0a1243b48f457e8ac5a841dd773513a081bb7f3638523614234074be021241a427642c856087914a21aec40690f8fa2d028aa1345b5a254164cb1868dc643683484ee84f05b21b40941cfda9ed9006bd8ac25df36217c134735b838c7105e1920b005a840e635fc87ad056a4c9a6ab2d622bec16cd8b1cdadb1e14d9bd61c9c6336a2a53d66d39a680bcca6354d96988d3eb6898d8d68daf8f854c2f50dcd8cf79b1e5a7bdbcc18a9c664624cf2b6c821b240596bb46e8d916ff7350f919588d84588bb96c9c298044d4f2da92b136e56246a13d72254e39194367ffb6d3cc5d52e662c227779b9f0826fcc593547b11b1932506d3566b55573a402bf3d4e075fcd81e2ede5505b85365ff3dacab75945ad88f838d546b68172b0890f22f0d6e6472c8c6285618a9b92a619395468259b32810d156f0f95701a2aace87587cac5d71cb5e2ba3d5488956c6f5fb59175a8101bef3294a1e48a07be505af0f64e131fa2b7c72e44c6aeaf0994ee5da029fc5a3665269a0b86d6fd2933655d777ab19b0314a253a92f0f6d2b9035daac90aa3dd78c4db3fc714964e7e361fc6e18de89638c8eba0e1e6aa2112ca606162a4042e976a8000d1512ad1a23c40b91507e3b9431928d508a0ac4f17d9f7b48a07699ad8da45385e178a1e0f586dcecc439b67c0a1ff8d6c779b7eb12ed5a638c78b3f513d84813d3bb7ada10d6c78d7a0bf1ec5dc0ec60284843473ef89e3176b8539d7da7757d1bf4783c053f352f6b176fd09ef1f687186f6bb36f50167a745d99d546015e7c1c7984e78e96f07aab8a931bf488a21642d4bd5773c716583dc21fe5f9a589627d9a37280b9b8f0fa255eb6f0e56cdda28943397ea58415817ba415b4c749b496d7574028075753d1555b8770602ed0c88cd5fe09d8130e53f0c3b9d81b07706854ff408602a1ccabe40ca3e71ce20f0aa2f5caabec0abbe8f9d0314a1f0aa2f5caabec0aabef03ca25313c46c73a9fa02abfac4b84bbce84b97a22f4f2afa122ffa122bfa82180089177de952f4e510455f5af7028915fdced3cc4c6225bf69e6c8e5ec822fcf2ef8d25af0e520055f5a0bbe7429f87288822fad055fba147c3944c19767177c354cc157d682afde57f0eb18d672af9ccabd42cbfd198fdfcabaca9553c55758c59727acf10319f78aafd08a7fc2fa3bc44437884318ba29a821d1fd36e900056d684e43110d2d68684943b1814ef876a99ea1d6ad4f393435cadad41801cd162a3adade1e20d5159084221a5ad0d09286e23a0b8d2a5808853764caa52153444316b665f269997c5a26128a686841434b1a8aeb4c6899f06652b934938a68263b3b6240cb14d032915044430b1a5ad2505c6742cb44ac37974658d91b61a351486b14d21a915044430b1a5ad2505ca7416aa4f1265ebb34f1daeb6aa483cb4034ff6b4966eec1243b405dc96828a2a1050d2d6928aeb3a225c39f4634f63422593b7f46e7cfe8fc4928a2a1050d2d69283690257ffc494abb3c4969fb9394d188d31a715a23128a686841434b1a8aeb34708d6cad80b6f68735ea1d3dde75f6f083d9d16f6c74be463366a88e82d69184221a5ad0d09286e23a913374445bdb43e692ce5cd299935044430b1a5ad2505cf33f23735b837da3159db9a23327a188861634b4a4a1b8e67f46e6d6365af79c20187de82659d34d320d4534b4a0a1250dc5dada245bf5b19e7e6897d30f6d3ffd301ad21db4a63b681a8a686841434b1a8ab5b583b66a683db9d1d8c94ddfd7fb336d3fca31a2d2fdb6a6fb6d1a8a686841434b1a8ab5b5dfb68a8a1e431d32a7bb684d77d13414d1d082869634146b6b176dcbdcef3f46ab6530a64c7a1d196a48e88e0c3414d1d08286963414d7c9f8a7cb603d06f4df7b0c78f8a54deb49a0ef7412e8bfef2450ca4b6ec8583b3ddfe924d0474f02cf3895f36dedd2b4463dfc97befa7c9ffd9540804ae474e7d95f6004e7b3454b83d39de71cc3d7f286f816528c50e3f5806d923d972fc6ec470fe9db2e2f8fde1b97cd2b3bbe3cbcb3d38614408a80d464561c7e229066939966382426538dde050f307017e15003a47128984c7d0f77184c663804bb0ba48c33f439dcc53108b601b80b8560e9c25d02bf4bc05d2834554043e13414d050380d80621c9a2aa0a1701a00c538349520afc4e59520afc2e5056886433742412c5c7901290b3c6501290b3c6580621c9a0a4859e0290314e3d054c0c416f8c406f23381cf4309135be2e4254c6c894f6c80663834f5616aa000f32631c31564a005c3b5609015c3b36290154349dc00140b3c168784399e308784399e3040331c9a72986a1c9f6a1ca61a4e6306d08c6238b945ddcd412554a4a898142800e2a1da45c56c46013d89abe0e3bfb65aa89fe9ee715dbc9ab8da546f17e6ebddf3e1ad44d80eeefce20dc687a7fbb74d327afcf154bcf7087e5eb3759aadf39fd56fbae43f5f930f17e02b5fad77fb7996a55951ea8b973edf36abebf8f3fcfefee3fddfc1df3faec6f55568004aafc5078c450fb9df9998fccebae440c8f435c956790ab527f9f36db569b22d7f43b9620b02c44d969f8a5742bae48ebd7b4def9b64bfffe365b53b0a20de17e088fe7396acf224ebc490a7c6384be17be14fee151fdd2bf8176a89751a94bf36ef360dc0ef70d3e08e05933bde47ee8439ca8201c9092027fbc82977726248720ac8e93e72d29d9c1a90dcafc1e4b7a0879a70a6f6eb80cc3ef6d1e2ceb43e0e399ae1e41ed90d8fa931f7c10c07a426f9e49faa6fa279eedc241f909c06727d9b5b79b2e3484e0f498e0339c14777d01dde89be421cb893e44392846efd4ef591732f0fe06f3872c5d35371566125e7be0183bbe1b815afc59dd6bd70baf02f8a1763dfddbd70f5be002edd0bd7a7c63853ddeea8f7a8cb2cc486e80d39dd7c3a05705297ee3f891867a93be7a3291fcdc564a1ed6b8bb92ffce9809b52ace041c8f77ab8b9b785e06fc04d89e949f16e999ddc09bb12d3039213404ef691736f0bc1df80e41490d37de4dc1b43f0371cb9db6032ef690e997b73783b607318f5d1726f0ca301694dc3517578d4539f997b6f381db06f8555509e1a5ab9b97786e06e406eda2b0f8caddcdc1b4270372037ee154760a3e2fcb47847cccaf194f230244705dc540f37f7f200ee06ec0bc3531b17b2e4ffb2f8251ca071a17b0ab7002e8d0bddda5231ce1277164ee2aebec7db8df3b0cf4edb6d8a3f53f7eb2a7b0697a32f699ea75bd0befc9aec294d4192e22790fa25593d1e7ed8244f79697531caaa2fd8cacf79fa5adf3b3efcfdbbb7d711a49000e922f6878bd734cbb3d53abf18edab3f5167be1e1b1ffe68dff5ff01504b03041400000008000c46544ce6ce3522a92600003b53010018000000786c2f776f726b7368656574732f7368656574322e786d6cb59d5b731b37b685ff8acbcf2a9bd87d4f39a992480099dc13e7fea68995c415d9f29194c999f3eb0f45116d72637f8d96453eccc4f6b779c1d602b800b67abdf8e7eafaaf9b3f2f2e6e9ffcef9bcbb7371f3ffdf3f6f6dd47cf9fdffcf6e7c59bf39b6757ef2edeaec9ef57d76fce6fd77fbdfee3f9cdbbeb8bf3579b07bdb97c2e8b45fbfccdf9ebb74f3f79b1f9b76fae3f7971f5f7ede5ebb717df5c3fb9f9fbcd9bf3ebff7ef7fa8f3f6f3f7eba78fae4f9272fde9dff71f1f2e2f687776bbefeebf3f161af5ebfb9787bf3faeaed93eb8bdf3f7e7aea3e3a3d95bedf3c6853f4e3eb8b7f6e76fefce4f6eadd1717bfdf2e2f2e2fd7f5bd7bfae46e40ffbebafaeb0effebd5e625ffefeaeacdcbdfce2f2fbeba1bc5bad02d1677eff6e2f2e2b7dbbb573b5fffe73f17f74f127b79fae4e67f366f60f3e7f11dde3de3ee9fd31b099bdeacc7f2eff39b8be5d5e54faf5fddfef9f1d3f5db7e75f1fbf9df97b7df5dfdf3e9c57d035cf3f4c9b6395f5cfce7e2725d9ebaf2dbd5e5cde6ff9ffcf6f7cdedd59bedd3ac87f4e6fc7feffffbfaede6bf37b7ffbdbcf8f8a90cebd1de1735cf3ab718aaae49cf643f876c9f43c6e7a816e373b8e6592d4dd73b293c4bb57d96ca7a27c3f463ebed636bebb1ae7e267de39ab6f40e9aedb334e6b3f4cffaa6a9dbbed48d76fb2cadf92cddccf7d26d9fa5836799d7d37efb2cbdf92c8b99cfe2527b07f347f3ccd58b349ee7f772db0878757e7bfec98bebab7f9e5cdfebebddf9dd4ae03e926e3d4d7ebbfbd7d3f53fafe57bb3fefb7f3ea9ab17cfff73f714ebffad1f75ffd0fb3734eafce9937bb93fbbfb295cdf8be5feddec3efb93db3f5ffff6d7d9d5fd239e4f3c93d49ba7a9cb4fb37dc767f7a577025ffff3dbfbc6dd81e5f6395cb5332437cc1e52fbec7e44cdfcb7d2d05bd93e87dbeb6e3dbe954d51d82f7abb296a86c5dc372c5dfa19b4b3dff1e97de97a4dd97d63cdfe1b3bdb16b9c56e51bb5fb44c457b43ecf68b566651bf5fe4cda24135cb2a6a16fb453115c96e91db2ffa745bb4f333d38dbe5ff83735d7f70bc05a15b53d7fba6d439b9d1fa27a5b67a9a6dda9a9656855dd32d5755a4f2b4d8c57f1336ac28c9a986a7aaef9f47d4ff6dfe8bf087c46e073025f10f892c05704be26f00d816f097c47e02581ef09fc40e047023f11f899c02f047e25707a6a90e909d26f1ed02eec09724f9b46bfd0d916e849a1a6eb725b96cf0905ac29512e09e592b82d999a0f3dcd07029f11f89cc01704be24f01581af097c43e05b02df117849e07b023f10f891c04f047e26f00b815f099c9e1a647a3e0c931f18f7b4eeb3f9b005839a0fa2e6c37d59ebb2f9a080351fca2561fbe61713f361c8e7c3ae6db99f1103cd08029f11f89cc01704be24f01581af097c43e05b02df117849e07b023f10f891c04f047e26f00b815f099c9e1a647a46dc39c9898f882d363e23b6c42d2a352b2a352bd253e41f139a58f362464d98511353cdeed470aed7732395e59303c967483e47f205922f917c85e46b24df20f916c977485e22f91ec90f487e44f213929f91fc82e45724a7a7162acc17373d5f1c7d8624a23f446a3d5ddcfe32bf335d1431a74bb926cca889db9a61f7ddbaaecba68bc3e942e433249f23f902c99748be42f235926f907c8be43b242f917c8fe407243f22f909c9cf487e41f22b92d3530b15a68b4c3aae2d766ec8e78bc0e74ba3278ce0e78b22e68449ef60620f11e614c55454edce2ba9f451c2a73b2dd17386c867483e47f205922f917c85e46b24df20f916c977485e22f91ec90f487e44f213929f91fc82e45724a7a7162acc996afa23a6c28f98cafe88d1e783db3aeb23461173c6946bc28c9a986a5c61ba54385d887c86e473245f20f912c95748be46f20d926f917c87e42592ef91fc80e447243f21f919c92f487e45727a6aa1f7d3e5fafe0b979bfc487d9c1d356e58b6449f6a757a76d4f879a288393bca3561464d4c357d6176d4383b0c525877eebff5a8053abbc5bb9fc7ea44f06c5be39addef271a7d4eb2ad6adbbcc3dbd79838b2f7ba667c7498f1e8986ada425f1becab41f6056a7fe733b671fb258764abef59420ba724daeb06de1756996b5a696236307d1733a9d11945717cc3b2dbcd417ff9f3e9b6ceeaa641f6bbd94d77b3db17e54e33b7a456bd1c742f3b90d34a13b397e59a30a326a69a5d59564d9d3512bfddb14861baf7d3d3bd679df6b64ef5f670b92db474dacfd0693f47a7338ae23896dda27aedd4757bf1cb028beceb7498d6e9b07d07d9e1f0d9884475537fddb22db4943acc506a7a99c98dce8ca23816edf9cc4ef8ebf17de1c96252785b6c092fa14c78fa13665b68084f13ab55e965268537a7288e63d92d6a2a67b5eaae336e52445b6c2c7689a8c5aed367b1a92e979026665fca3561464d4c356db929a67e645a3ff7b8cafcdb5922bdea923e824b75867a64867aca3561464d4cc35ccc938e7db5cfd8942a376f6ad29ca59a7ad7bb650aaac8bba5874f2aa802fd85198f8ea9e64375534feba6e675a78675479f456d0b2de5d4339453cf59776614c5712c7bebceb020f1d817568d9d69f0c36b44fac34b9f3908b9f695266667ca3561464d14c3fdb7f5c4855d4a41edb482d8da0b58fb4eef3e05adbd26669fe658fb3945711ccb6e51b7e84941d3367d8b4d0575a020bde91134ea9a989d492f33657fe614c5b168f707d1b5dd6c114dfbee2db63ebec876eb2d8da0edd6c4ecd41cdb3da7288a65bb7b694943d3167a8b2df73398ee477fb9bb1434d09a987d29d784193531d5b4e5a658f2a9a6ddf3161bf24944b99f5e6f332af4ce9a585d9a511366d4c434ccc52ce954d3c6b952c679b3bb56ee675ba38eaeb435dc5619f6a79a61a075cd7bfb33e3d1b1326cf34384336d9b2bb4cd956d9b7bbde9aad0366b62f666866daed2f77053ab4e65f8e609e54cfbe64af9e69daeecb9e5f75dd186b922cbbbd2c4ec4ab926cca88995619dfbbe99ad9d69ebbcc596766a5b3bd9bcdab3c7dbc9a7dcf5aa323c7423b56ed99caa5059363a2b8b69e0bb621aea9ac434eda3ab06c5d4d862d2fb8b6acfe3529b0c23dc2c44b7694e55a892bfdfbb6e6a21adee9361acdd6251cd16d8b4b3de624b60ad2d30bdffa8da3902332c76e532811955b5be383a5496cb7675dfe9ceb5b9c2dca29d779af6e7eb57af2ede8e4deca69bd86113bbfd268e6499c85edb5addb62e6f88d3bf70e275d5ce875fa75a35a29886b4bba3da9f72fdf494eb71caf5f694d31bb25467acdf443c92a00989a2b7a6d34c515cdf37794a09032a61b0a793de8ca53ae3b39e88471234a1ae0cf3a7caf57ddd8434b678cf14aaa97eb6ad51a6504b645b6598c2f41ab94490042431910f5545ed2655b1c5862a12d1aad01bcf5437b95aec176d9f4c7f65e8adaa565fc912b655fb8bac387d6a19d3c8f794e364ded1e1fe225b4fdbe81a6d74ad6cf4fb45b616a36dbd6e9be18fc5b5ba6de4c143adbdf38eae9463ce16d97ada24d768926bdb24eb5f4958d67b16968463f8dc4eb4afb1aa7a6d078255552daa41ebc6b0cdced5e68c533299be4c658bad96d5fb2ddb91496d342993499d0fcce98b8cbdaeda91493a39ce641ad3835a5326e682337d45c9165b73a531179c419f55a4bae905a7c967ce7ad9d42d31aa06a7fdf0b66a7fc1a906fd9bac318d7c314338a50567da1ad7688d6b658d77946499e14c4986cd6df5f6d6ebaa1d256903bca324e5790b4a52fd9876b935badc1a5d6e6db95cbd39a80d97ab8fefbd2eda69079bdc7ad2e496da317d9c5ce3717222463b7aa31d836e877194ac7f13ddeba29d76e803e49d76f4a58fa3e983e21a0f8a13d11f47fa242bd54dafb4c6596fa517026f55f5d9fd066aebba8bba1b1abdac1867c7f33e8f9a6933dc2ca86789e49f47cdc2e8929649b3c8c75f0f7a15d155ef75d22c5467deeba45176b8fc79d44c1be0060d70631b603d8e656319e0ac2586b575fa12166f562df42779682c07dcf4fa4563633ae00ffa406aa61d70830eb84107dc180e585f93b96a0c07dcebb9eb75d58e94d801372507dc4c3be0061d70030e581f8036784c8cc423099a90281e606f3351c0dd67ee25327d5edce07971639f17eb8570d9d4f0535e21f1488226d42ee33078ba5dd09de963e2c6b8d05a1f4c34d685d6d90d1a1abcd03abd86212abcbc1a494c64e64a3cd99b69b7dba0db6dec83e0411f043786f7cd971ac3fb364edf1dc7aaeaab46afd0d64170dbea152036d641f0874fc6f74bf66e77a7bd7383deb941efdc18de59df1961d518deb972da3cebaa1de9b1796e66986790daf4d1718347c78d7d743ce873c166efb0975a639c0857fa8b1f6f550d5566068caaae955e2bcd3a5d9ebd8ed9c29ab6e40d5af24659f21d6119265cdf5c60d518f6bad177a8f2ba6a4758da78ef084b79ed472c6aedf4351b2d5eb391885ed4f4717caa9bf49dfb45e98b71d52aaba8cb84d65a173ff79516774c033fe69ad64e9bfa164d7dab4cfd7be9b5868dcfa4d71a06bdd5bfebe475d57be9b5dab9bf975eabccfafc35ad95c979b8c5c63c4c44af69fa883fd54dcecafda2ed6a9575c628ea17bd569a183be3c1e95f3589e9d90eb8a6b5d39ebf45cfdf2acfbf232ceb9c3b9ba79679d7dfb87b5db523ac0ad7b45619fe92b0ecbe4c1f6db778b4dde2d1766b1c6d679f94ad75b4adbf4af0ba6aa72f7cb4dd3eec687b72064e9f79b778e69dc8de5a5f2d16fabb92543769b8f68bd2976cda555855bd3ed30cad75e6ed160bfd0d7f4c433fea6a3fbd3f68717fd0e269786b9d866793d2f0faaed2e758ba6a477c7c1ade3eec347c6ea3a6ad7e8b56bf45abdf5a563f5bfbad8b412a7d2caaab761ac556bf9d61f53fa051d307e82d1ea0276234ca3840d72777abb6371aa54f99bdaeda69149fa0a721e171563b6dd75bb4ebadb2eb6991d2270f2d39ee952677cf90ade1332eb5b66acc45e90147e60f5ae8bb6953dfa1a9ef2c53bfeea1fe16a25bc08f7ea589d5c31935c1aab17ad83dd8c643cba62fd3ee8ccbb495ed39ebaccbb4b37b02757899767a8dfce00b4940121339806fe8a64fd53b3c55efc49693fe6ea2b3ced8b56fe88c3376fdfb25de2ed25f955b556ed167d75874f250713d7c8defaae9e656d8dc8ad6f84426d7f8fda26da79c760dba6a477944621ad1c3b788ddb47defd0be77cabe27a1e9af323acbcc679d31cc7c93dd7f7c5655b0aa9cabb2eb073be5f20ff75130edf93bf4fc1d78fe6c3db33c7fd652c3cd679f0ae59a60d598ed7cb0dd87ee4ddf30658b2d41b6b620f5917faa9b16649b8b28eb5eb926583566f7da638971daf87768fcbbce16a33ed6eeac6d40d64e631b90b5b35c13ac1ab39ddd03c478757979feeee6e255fa46bb9bfe26a0c36f023aeb9b8075cbf4f96ca70ee677fc085e44ae89d91deb7272ab3b0f3ef19f2bb6e90bcd3bbcd03c112d367dde98ea0c138c179a6b6276cebae4dcea9c75cdf9072c72fdf4f537bd7131ba7a2b67bd75317a7673bf1e2f464faf914b0d494012133980f5eda74ff07b3cc14f4489c8e923b35437b962ed176dbf88d3566d4e51b08af635b36de183afc981fe4d1ffaf778e8df5b87feebfe65410f022a5821f1480292d8cbe13435edf87b74fc7d656b4aefce7bb2e62b241e494012fb0f36fafdb4d1efd1e8f7b6d1d7fb96654f47ed2b241e494012fbc39dcef7d34ebd47a79e889685defca43a4316443c928024a681802cb4c3e9a73d768f1ebbb73db6d33b94be452d10f1480292d8b787d3c2b451eed128f7b651d6bf8cb3ece9907b85c4230948623fe35c1c5a306d7c7b657c37df0f6957d25bae44ef19b655962b41038c2420897d7f38794c5bdb1ead6d225a1e594fd0da22f14802929806f270790cd3a675c08bc613d1ab86de170d642f57483c9280240e8733abc3b4591dd0ac0e6056f58e6770240b241e49401207f7c1b298f69b03facdc1f69bda182f07f49b483c9280240e87f39bc3b4df1cd06f0eb6df14edc107f49b483c9280240ed37e531b8b61da640e683207db64eadfe75c0e683291782401491c1e6b32cd2f1e8669bf39a0df4c44cb427bf0811ce20a89471290c43490b9ab85dd8d69173a2817bab9d44bd98d6d8db21bd9e74a4b766340378a242089c363dda8dda669633aa0311d6c63aaef6ab31cd09822f1480292383cd098dadd98f6a8031ece0ef6e1ace8adcb8087b3483c9280240e8ff5a6767ba66dea803635112d16bd8b19c858ae90782401494c03799458ee62e6a7d492b875c3f8856d5a250b8858a06b65e419054671448715cde61e9213aa49dc90cd88b46eb29082051a59469e516014c7f1cc742d9bc4824999a0871d919649162cb04017cbc8330a8ce2880e2d9369579bb82913dbd7ea7bee2fc7424b26e86c190546711ccf23d7984204cd4299defb2b5f94914955cac9e42aaac9ca8caf63a9081d30a338a243ab68da04276eaac8b6c1fa7ad2e55868a9088d30a3c0288ee379a48a0a39310b3c931d915a82aa2c686781a7b28c3ca3c0288ee8d0e29936c3899be2b1edb0febe6e39165ae24143cc28308ae3781e299e69539cb8291edb16ebdff15a8e859678d018330a8ce2880e2d9e69739cb8291edb1eeb5fef5d8e859678d020330a8ce2389eb936c715dcb06337ec6c375c6561828edd3022cf28308a233ab04c5cc10d3b76c3ce76c355b66970ec8611794681511cc7f3b835c6153cb2531ef9fef2056d73522cea9ecdc993a2b66596cd716c961105467144875651c12c3b36cb0ecc72b6a7726c9611794681511cc7f3481515ccb2c313e211e92528f3c80ecf8819794681511cd1a1c553f0c88e3d72424a3c3a3c6e39165ae2618f8c28308ae3781e299e824776ec919ded91eb6ce7e0d82323f28c02a338a2438ba7e0911d7b64677be43adb4a38f6c8883ca3c0288ee3996d730a6ed8b11b76b61baeb33d8263378cc8330a8ce2880e2d93821b76ec8613d232c9360d8ecceb8a91671418c5713c8f5b63a4e0914579e48dcdd1d969a94ad99c6cb111bc3a777c1d43458802a338a203ab480a6659d82c8b6d96eb6c4f256c9611794681511cc7f3481515ccb2f081b2d807cafa669acbb1d0588210794681511cd1a1c553f0c8c21e596c8fac7f597539165ae2618f8c28308ae3781e299e824716f6c8627b64fd3b72cbb1d0120f7b644481511cd1a1c553f0c8c21e39212d9e6c2b910a2df1b047461418c5713c736d8e14dcb0b01b16db0debdbee2fc7424b26ec861105467144879649c10d0bbb61b1ddb0beabef722cb464c26e18516014c7f13c728d297864511ef9febe1d99cdb1aef6cde29753996973d82c230a8ce2880eada282591636cb096915e56d62b38cc8330a8ce2389ec7a9a82a98e58a0f942bfb40394b181e0b8d250891671418c5111d583c55c12357ec912bdb2367498463a1211e449e516014c7f13c523c058f5cb147ae6c8facef68b51c0b2df1b047461418c5111d5a3c058f5cb147ae6c8fac23319663a1251ef6c88802a3388e678ecdb12fb16e9fa5d6148c72c546b9b28d7216e634165a0a62a38c28308a233ab4820a46b962a39c905650b69f48859682d828230a8ce2389e472e3f05fb5c29fbbc7140fac6dba94a39a0fc430caf401e5fc75211fb68447144875651c147739ee088b48ab2ed168602ae18794681511cc7f34815157c34270e8e482d41faeee3cbb1d05a82d83e73ea20a338a2438ba7609f2bb6cf0929f16477b71f0b2df1b07d461418c5713c8f134f219230714b3cb56d9ff51dbc9663a1211e8e23641418c5111d583c85a042c74985ce8c2a5cb7295ba075c0e06e9bd83e230a8ca2d3f183a5839eba60946b36cab56d94f5dd2e9663a1251336ca8802a338a243cba460946b36cab56d94b31b098e85964cd828230a8ce2389e47ae31058faca3073736a7d13627e500eedb9c5c457c7532660c7a4681511cd1a1555430cb359be584b48ab2ed564dde76c5c8330a8ce2389e47aaa860966b3e6baeedb3e6ec9e0063a1b504b147461418c5111d5a3c058fcc69844ec711a636653b2dcc145c31f28c02a3e8e64411cee84ac123d7ec916bf0c8d9cea1668f8cc8330a8ce2880e2d9e8247aed92327a4c4935f575993a55d31f28c02a3388e67aecd2964123a0e25743a95308d3fdb2360b2e08a9167141845f7c040c2b93229a4163a8e2d74666ee1ba4dd9a641a70deeb689dd30a2c0283a1d45f8616b4c53f0c88df2c81b9ba3ef269daa94cdc95c60c35727376c961105467144875651c12c376c961bdb2ce7875e0d9b65449e516014c7f13c524505b3dcf08172631f28e71eb9e10365449e516014477468f1143c72c31e39212d9e7c8eb14746e4190546711ccf23c553f0c80d7be4c6f6c85db67368d82323f28c02a338a2438ba7e0913975d0e9d8c1d4a66c2b81d1812b469e5160145d217130b7390537cc4183ce4c1a5c8f3fdb23e8e4bfddf1b31b46141845a7e3030f2593821b6ed80d27a465926d1a1a32af2b469e516014c7f13c6e8d690b1eb9551e796373f49d835395b239d962d3f2d5c92d9b654481511cd18155544803741c07e8741ee056457db6a7c24cbf1523cf28308aeea15180d0958259e65c40670603aebb92edb4749edf6e57d823230a8ca2d3697f87124fc123b7ec915bdb23eb7ccde5586889873d32a2c0288ee379a4780a1e9903ff9c4efc4b5dc9760e98dab762e4190546d13d3aec0fda54f0c89cfce720faafcfb6123ab06fb74dec91110546d1e934bf92cd690b6eb86537dcda6e58a7202fc7424b26ec861105467144879649c10d73309fd3c97ca94df9e738bb61449e516014dd9c50be195d2978e45679e48dcdd1b7224e55cae6649b8596af4e6ed92c230a8ce2880eada282596ed92c27a45594b789cd3222cf28308ae3781ea7a2ae60963b3e50eeec03e53edb69757ca08cc8330a8ce2880e2c9eaee0913bf6c81d78e46ca7d5b14746e4190546711ccf23c553f0c81d7be4cef6c83a9b7839165ae2618f8c28308a233ab4780a1e99b3f49c0ed34b6dcab612187bb762e4190546d11582f4329b5388cf739c9fe720404f27272e9d0eb4db1d3fbb61448151743a14ef503229b861cec473108a37649b061d54b7db2676c38802a3e874d8dd07ae31058facb3ee363647df023955299b937f52f125c83aa46eb73d6c961145a7d3ec0ea5a28259e6303b07697643b6a7d20973bb6d62b38c28308a4ea7d47da08a0a6699f3ea1c04d60dd94e8b13eb1879468151743a9dee50e22978640ea773904e37643b2d8ea763e4190546d1e928ba0f134f2188cee924ba9daef4b6471eb29d03a6c6ad1879468151748fcea18336153c3287d23948a51bb2055ae7c4edb6893d32a2c0283a9d3557b239854c39c7a1720e52e5866c8fc0b1728c3ca3c028ba4747cb814c0a6e9873e69c1d34e716d9a68193e61879468151740f4d9b83ae143cb28e9ebb1bba0e81394b55cae6e42ae24b9039868e516014dda393e8a05f05b3ccb174cecea5738b6c4fc5c1748c3ca3c028ba4238dddcae14cc3287d6393bb5ce2db29d16c7d631f28c02a3e81e1d5d076d2a7864ceb17376909d5b643b2d4eb263e4190546d13d34cd0eba52f0c83ada6eb72ba6477659cebdc318ba1523cf28308aeed1c176d0a68247e6943b67c7dcb92cbbde71ce1d23cf28308aae907597d99c42c29de3883b6767dcb92c7dde71c81d23cf28308aeed14177b64c0aa1778e53ef9c1d7be7b25479c7b9778c3ca3c028ba8766df41570a1e5907e16d6c4e7683e4c1ba0439bfe864e04b9039148f516014dda373f1a05f05b3cc2179ce4ec9738b6c4fc531798c3ca3c028ba4254dedcae14cc3247e8393b43cf2d328fcc217a8c3ca3c028bae304e9b942929ee3283d6767e9b92c26de71981e23cf28308aee20817aae90a8e774a4de6e576c8f9c85bf3b8cbf5b31f28c02a3e88e13a8e70a897a8e23f59c9da9e7b23c78c7a17a8c3ca3c028ba42b05e6e730a6e9843f49c9da2e7b23078c7317a8c3ca3c028bae344e9b942969ee3303d67a7e9b92c1fde719c1e23cf28308aee20917a5288d4131da9b7b139fa06c9a94ad91cbdd8a432c3e60867eb310a8ca21c275b4f0ad97ac2d97a6267eb39fdebf94be16c3d469e516014a590ad37b72bd3665938714fecc43da77f9b6f299cb8c7c8330a8ca21c27714f0a897bc2897b6227eeb92c775e38718f91671418453948e29e1412f74427eeed76c5f6c85914bd602ede8a9167141845394ed09e1482f68483f6c40eda73593abd70d01e23cf28308a5208dad336470a917ac2917a6247eab92c9a5e38528f9167141845394ea49e1422f58423f5c48ed473595abd70a41e23cf28308a7290483d2944ea898ed4dbd81c7d83e454a56c8ede2ca432d3e6a05966141845394eb69e14b2f584b3f5c4ced673da342e85b3f518794681519442b6deccae1412f78413f7c44edc735a634be1c43d469e516014e538897b5248dc134edc133b71cf6521f7c2897b8c3ca3c028ca4112f7a490b8273a716fb72bb647cec2ee0573f1568c3ca3c028ca7182f6a410b4271cb42776d09ecb42ef8583f618794681519442d05e66730a917ac2917a6247eab92ce35e38528f9167141845394ea49e1422f512376562bbe12ce37e2cb464c26e9823f518c5713c8f5c630a1e5947ea6d6c8ebe0b72aa523627ffa4c24b9085b3f5180546518e93ad27856c3de16c3db1b3f59c647b2aced663e4190546510ad97a73bb5230cb9cb82776e29eabb29d1627ee31f28c02a328c749dc9342e29e70e29ed8897b2e4bbe174edc63e4190546510e92b82785c43dd1897b3b5d11db2367c9f782b9782b469e516014e538417b5208da130eda133b68cf65c9f7c2417b8c3ca3c0284a21682fb33985483de1483db123f55c96712f1ca9c7c8330a8ca21c27524f0a917ac2917a6247eab92ce35e38528f91671418453948a49e1422f54447ea6d6c8ebe0b72aa52362757115e822c9cadc728308a729c6c3d2964eb0967eb899dade7aa6c4fc5d97a8c3ca3c0284a215b6f6e570a669913f7c44edc7355b6d3e2c43d469e516014e538897b5248dc4bdc148fed91b3e4fbb1d0120f7b644edc6314c7f13c523c058fac13f776bb021e39db39602ede8a9167141845394ed09e1482f61237c5637be42cf97e2cb4c4c31e9983f618c5713c736d4e21524f38524fec483d9765dc0b47ea31f28c02a328c789d49342a49e70a49ed8917a2ecbb8178ed463e4190546510e12a92785483dd1917a1b9ba3ef829caa94cdc95c608597200b67eb310a8ca21c275b4f0ad97ac2d97a6267ebb93adb5371b61e23cf28308a52c8d69bdb958259e6583db163f55c9d79648ed563e4190546518e13ab2785583de1583db163f55c967c2f1cabc7c8330a8ca21c24564f0ab17aa263f576bb627be42cf95e30fc6ec5c8330a8ca21c274d4f0a697a899be2b13d72967c3f165ae2618fcc697a8ce2389ed936a7e08639376f445a26d91e8173f318794681511cd1a1655270c315bbe184b44cb24d4345e675c5c8330a8ce2389ec7ad3185dcbcc4f76d8ebe0b72aa5236275b6c6abe049903f4180546714407565121404f38404fec00bd75cfb236b159e6003d468151944280dedcae14cc32c7ea8d482d414db6d3e2583d469e516014477468f1143c32c7ea8d488b27db6971ac1e23cf28308ae3781e299e8247d6b17abb5db13d72967c3f165ae2618fcc697a8ce2880e2d9e8247aed92327a4c5936d2552a1251ef6c88802a3388e67aecd29e4e6256ecac476c359c6fd5868c984dd30e7e6318a233ab44c0a6e9873f3c4cecd7359c6bd706e1e23cf28308a7290dc3c29e4e689cecddbd81c7d17e454a56c4eb659a8f912640ed063141845394e809e1402f48403f4c40ed0734dde2636cb1ca0c728308a5208d09bd99542ac9e70ac9ed8b17aaec9765a1cabc7c8330a8ca21c27564f0ab17ac2b17a62c7eab92cde5e38568f91671418453948ac9e1462f544c7eaed76c5f6c859bcbd60f8dd8a9167141845394e9a9e14d2f484d3f4c44ed37359bcbd709a1e23cf28308a5248d3cb6c4e21374f38374fecdc3c9705d90be7e631f28c02a328c7c9cd93426e9e706e9ed8b9792e0bb217cecd63e4190546510e929b2785dc3cd1b9791b9ba3ef829caa94cdc93fa9f812640ed063141845394e809e1402f48403f4c40ed0736db6a7e2003d469e516014a510a037b72b05b3ccb17a62c7eab936db6971ac1e23cf28308a729c583d29c4ea09c7ea891dabe7b2787be1583d469e516014e520b17a5288d5131dabb7d395d6f6c859bcbd60f8dd8a9167141845394e9a9e14d2f484d3f4c44ed37359bcbd709a1e23cf28308a5248d3cb6c4e21374f38374fecdc3c9705d90be7e631f28c02a328c7c9cd93426e9e706e9ed8b9792e0bb217cecd63e4190546510e929b2785dc3cd1b9797743d7bf057396aa94cdc955c4972073801ea3c028ca7102f4a410a0271ca02776809eebb23d1507e831f28c02a3288500bdb95d2998658ed5133b56cf75d94e8b63f5187946815194e3c4ea4921564f38564fec583d97c5db0bc7ea31f28c02a3280789d59342ac9ee858bdddaed81e398bb7170cbf5b31f28c02a328c749d393429a9e709a9ed8697a2e8bb7174ed363e4190546510a697a99cd29e4e609e7e6899d9be7b26c69e1dc3c469e516014e538b97952c8cd13cecd133b37cf65d994c2b9798c3ca3c028ca4172f3a4909b273a376f6373f45d9053d5becdc902f45299657338408f516014e538017a5208d0130ed0133b40cf65d15fc2017a8c3ca3c0284a21406f6e570a669963f5c48ed57359528870ac1e23cf28308a729c583d29c4ea09c7ea891dabe7b23b8d0bc7ea31f28c02a3280789d59342ac9ee858bdddaed81e39bf312986dfad187946815194e3a4e949214d4f384d4fec343d97dfd88cd3f4187946815194429a5e6e730a6e9873f3c4cecd73f91d4f38378f9167141845394e6e9e1472f38473f3c4cecd73f96f4c736e1e23cf28308a7290dc3c29e4e689cecddbd89cec2ec8bd75097216809bca2c9bc3017a8c02a328c709d09342809e70809ed8017a2eff85340ed063e4190546510a017a73bb5230cb1cab2776ac9ecbaf5fe7583d469e516014e538b17a5288d5138ed51388d5cbaf7fe3583d469e516014e520b17a5288d5131dabb7db15db23e75f9763f8dd8a9167141845394e9a9e14d2f484d3f404d2f4f2e3764ed363e4190546510a697a99cd29e4e609e7e609e4e6e5fb70cecd63e419054651a673f33623ee0a2366630b1178c647321b5b8ec063141845998ec0db8cb8606575bcddc68d64372beead2b85b338fa5466ba11f6b49c73c7280ae7dc3dbff9f3e2e276757e7bfec98b3717d77f5c2c2f2e2f6fd6fafffbedbab27abaf3af4fae2f7e5fbf4ef3516c364fa0c0b2fe28d626683ef2f78f78fefe153e79f16afd9a3f9e5fbe5efff7f5d5dbf125dd538d9e9c5f5e5efd737679fef6af8f9fded9aa3faffef1d7d757d75f5edcdc9cff71b199a277fff8afb7effebeddfbc7ffb97f03dd47f7edbefdefbb35b87c7d73bb7e91dfd76be0df97e7ee93a7a7eee4544e4eab93d3fae4b439396d4f4ebb93d3fee4cc9d9cc9c9597572569f9c352767edc9597772d69f2cddc9524e96d5c9b23e593627cbf664d99d2cfba72f9e8fcff9e2f9fe18b27f5837e0ddfa6d7e797efdc7ebf5e0ff7d75bb5e85d7c37b76b777fffdeaeaf6e2faee6f6ba5fd7971fe6afccbe5c5efb79baaf5a274bf626ffe7c7bf52e3df6f9fd13bfbcb8fdfbdd93abebd7176f6f372ff8f1d37757d7b7d7e7af6fef7f14ff5c5dffb5f9d97ff2ff504b03041400000008000c46544c295c48de880c0000f153000018000000786c2f776f726b7368656574732f7368656574332e786d6c9d9c5f73e24616c5bf8a8b67ca46fd5772d9ae321ad19bad642b95d4669f195b1e5303c80bf238b39f7e855033d2d53dad4e1e32b63907a13e7dbbf9e94274f7511dbe1e5fcbb2befa73b7dd1fef67af75fd767b73737c7a2d77ebe375f556ee1be5a53aecd675f3e7e1cbcdf1ed50ae9fdb27edb63762b13037bbf5663f7bb86b1ffbf5f07057bdd7dbcdbefcf570757cdfedd687efcb725b7ddccf92997fe0b7cd97d7ba7de0e6e1ee6dfda5fcbdacfffdd63ca1f9f3e6729ce7cdaedc1f37d5feea50bedccf1ed5ad4b17ed535acb1f9bf2e3d8fbfdaaaede7e2e5feabcdc6e1bb716b3abd3f83e57d5d793fcd3f3fdac79f6ffaa6af7fbd37a5bfeeb34a8c6982c16a7932fb7e5537d7aad75f3e35b793ec83f4dda9cf37fdb976f7fbf9cdfe988fddffd89acdaa89a917c5e1fcbbcdafe67f35cbfdecf9aa73e972febf76dfd5bf5f18fb21bbe9e5d7559fd5c7e2bb78dbd3dc5e6459eaaedb1fdf7ea7379ac579b73584fefc7bada75876cfedeadffbc9f35c3dc6df6edcf63fd7d5b36bf65cdc83b93bc5642db3411da1f973f8aea8e22b9a364d7895a98a943e8ee109a3d9134fc64d33dd9b04fb6d7da2ee4e4206c7710cb1d442cae45aa13edc77173ceb89db54feb7afd7077a83ebae35e666876759ea86bdb3ce9708ee77cd4e3dbfab46092dbe6c5ead7cdd3d76575a9687820a1daa3a8c9a334833c19f3ce9934afdb3c7e6c1efff620167737df4ee7dffcd7bc52d479ebe857ec9c89edbda25297576c4dabb32991496bdab726bd189a9c3789ced4861e3e61b968cfd6c49eede3d9999c72fd71b67a78224b6fea87a8ccd094b347b243d3276fd2fde94886a6c29b4ccf94499220671a25c89db84e98d93f9c6b7e94998fe92c4adb9b2ef25acbce92f62c4a6496cc7cded9b2de9c9ea32102f312c5d9a2126c594d5b5c6759b0964124692892b3a8241dc8b2131409821455ded9f428082270417496c074aca62daeb398e920b25010d9b0367e0491f11541174e862a229bae886cba22a62d2e8bae8864114aa253999af00a2d0ab23fe4de37ae0aaa7069784fa82e223cce7bfa95a15122493091041587576875a4349104950755d84492e90289f038efe99748c37d2012118c44c022117c91643412018b44441489882892698ff39e7e9124b04a58eeb94422619548b64ad2058d44c22a9111552223aa64dae3bc671115090b71974814ac12c556499ad04814ac121551252aa24aa63dce7be2aa84a5cc4b247a0c2164d04bef49fbe84411c49b9862d111c5a287857079f68a2a6c1efaaf9408cbb1973c0c2c11c39788a04118582226a2444c44894c7b9cf7c49548105313c2a9bd48783c4d258d04f22955d848220835c2e3128651057cbb09626a023935e141351d2d1748aa5461238960d5088f4b185a15b04a82c09a40624d78644d29bb279059a9c2461241ad111e9730dc2a51958820b90a48ae8227d79452bc80e44a152e121141ae111e27187295a84a44105d054457c1a36b4a615e4074a50a1b4904ba46789c60d0154712445701d155f0e89a529a17105da9c2461281ae111e271874c59104d15510746db72502256200b15d1766542c9060a9c22643e8f4079440c5098656710a415a15905605a0557a4d2320ad52851d7e04ad46789c606855c11d3548ab82d06a2f9201a35e22c9e8358d80984a15369269185d45789c608055c12a0902ab80c02a7860cde8358d80c04a15369208608df038c100ab8655120456018155f0c09a5186171058a9c2461201ac111e271860d5b04a82c02a20b00a1e58696b3c171058a9c2461201ac111e27186035b04a82c02a20b00a1e584797bc02022b55d848228035c2e30403ac3012190456098155f2c09a5186971058a9c24522238035c2e32403ac389220b04a02acedfb3941113940d7338a18bacb4ac8ad546193214cfa0345a0e224c3a8388520a34ac8a89267d48c5ec948c8a85461871fc1a8111e27194635684795414695b0bd2af9f66a46e1544238a50a1b49447b35c2e32403ac1656491058250456c9036b46af64240456aab09144006b84c74906582dac9220b04a08ac12002b657839c0d2ee3a87acae4f92615795d1781830a5a61567a29fb23ac9e06bcad6ccebe6f9b9dcb7df2438651524d94ee5b232c3ac2e4aee95413a9aa663c6e90843d331e38153d38a9a7a9bad194632fc5ac5e13cacc0d82d5c3a96593a72b158d03ab1fd0582eac48e57911c2d233b5e224992d02838176d6039efea2fa5945d4aa45282342b21cd4a42b3bd4a49997c4695c2a02cfd0ca89084537befc548719270ebb83c82ac2a21ab4a8e559bf218e1076455aab03b6b04ab721ea620185ae50be27076e15014a455c5d16a130abdcc539056a9c285a2226895f38c43510cafe25082bcaa185e25d72d4bc5f12a25790579952aec980a0589152a4e31c48a730812ab82c4aa38626d8a835ef0aa0197761b0601964f8a81d771140c9926c2d252615c3291b45418824dedf486aa8230dba95c5a126da85e19e493d17ce4381f3aa6c29bc61b2a549c57f80d958c3d48ad0a52ab5270ec8a193b7db3550cb28a948e5dc1b123c529151afbe1fc9281014326551c93364b83363e14c7a4a3a5c130a918eda10c6e26827eb195732969e9d2e0a834666904a954412a55904a1547a5a3a5c150e988d91502ce15549c0aa228197b904a156ca47a8519bb1d8fdd2ce8d8992e2a85b142593876a438af400c5741b054102c15d7266d96c6e86d93c1ccf1f019ccd4143315d30ea5df5a5b71269d8cf882e99a46ad8c2094762a17560637ce8c8947d078b2713ce38d33831b27529c57e0c6a983c0d9a9cc72f00add386917ccfbb2d0f08726b07176a6e1c649a97fc5b94c42374eeffaab1ba70e92a8861ff5eb6406360f9d30f9489a0fc39fa38b340df1132a4e13fc1c9747103935444e0d9093760435839ce3e133c849df3634c392f4402bd644bf04eaf4df044e1d044e0d815343e0d431c0a919e0d48ac60381132a4e0781f334e02065762ab71a14bf77d0dea8f78d2fc8a052744af0ba9df33065a062f788531441feec546eee35bf4e684fd4fbc6d7ed5029bc12ba5ae73c4c143a76459ca208c2a52670d9562bb95ad703ccec3685d11b8b81c5c160e6684c85869c0915a7a75a9e3a08971ab63cbd42ca20a12d4fef0bc2c4d0e43f05a3c3679a99f46b562bce644d4aab83eb78c6ec974130d5104c35ec786a0e45158d8741d1116b69d8f1848ad3531d4f1d844b0d3b9e5e21fb256d50e7de970587cf343fc78b83e96c52d38a35a9517570ed4fb47798208d1ad8fe347cfb33a1ed4f03db9f50294c44d393f38ca3305cd3134611444d0351d3247cb1d0669f214cd98b02298589f82e29e761a2e0fa9e308a20841a08a18687d08436770cfca41e2a8589f87c9ef3305144e3e6298a20631af809bd576855d08b79ef63aa02298589f85c9ef33051309fcce32882f469608fd328be2a46ff2336fc641e2a85511155c1789828984fe4711441fa34b0fbe9155a15f42acdfb8217a94393ff9084bcb118a6af29044d8831f5c7de25f4379b9f26c8a706363f0d6c7e1aa6f9397adf355cf393a60399142ace4c31a90932a9814c6a0093d2ab3463e13a414a610858f606ca71e978eea391f3144090333b959bf0945f1df4daccfb983d132945a770338d14e7153cd341be34b079e91532d3b403977b1f33d34829bcc2cc346c5a7a0582b40d62a2854d4bcb372de99d3372bb40330a95c22ed08c42c5d9c5c48cda2004762a33a35ea1334a79d8fbc6330a95c22be319858af30a9ed120e2752a37a3829f514abbdec7cc28528a4ee1661429ce2b78468300676193d04a7e4647f745917046915258d81c848ab353cd411bc4330b9b83966f0e0a4aaa163607a1525805671429ceaaa9190dc29785ad3fafd019a51cea7dcc8cc2d69f579819458af30a9ed1203859084ed6f0334a29d3c28e1e540a0b89092ace4e11930d129385c4647962a2cda5dc4262824a61213141c5593b35a34132b2908c2c4f4682929185640495c24232828ab35364648364642119599e8ce81748730bc9082a858564041567a7c8280d92510ac928e5c94852324a211941a548211941c5a5908c6e7a37cadb95872fed1d128f574fd5fbbe3edd7cb0f7e8f9768db9ba75aa3d0015f46da1cf47fe71a087bbe7e6d07facb79be6e7a6da5f8e7cbad7db50ba5a6fb7d5c772bbde7f6d6f97787cad3e8ac3a13afc521e8feb2f657bc1797af0a7fddb7b3d78f07c27c7dcdeb681d6dfdf9ac7b79b63ddbcc6e91e97efdb75f2307b4ce68f62fe28e78f6afea8e78f66fe68e78fe97c99cc9762be94f3a59a2ff57c69e64b3b5fa6f33c99e7629ecb79aee6b99ee7669edb799eceee6e2ec7bcbb190e61f4c0f17c1bcc5fd6872f9b66ec9fabbaae76cde8dafbf7bd54555d1e4e7f352be5b55c3f5ffed8962f75eb6aaeb0cf37d26b7fafab37ffdc53ca97bb7c3efc1f504b03041400000008000c46544c1dc0f855330c00002e4f000018000000786c2f776f726b7368656574732f7368656574342e786d6ca59c5b6fe3381285ff4ae06721b678958224407ce336b0b318cc60669edd893a31dab6b2b6d299de5fbfb24c3a52b1aaccee79e84ee2734c8a4745ea137db97daff75f0f2f55d55cfdbdddec0e77a397a679bd198f0f8f2fd57675b8ae5fab5dab7ca9f7db55d3feb97f1e1f5ef7d5eaa97bd27633169389196f57ebdde8feb67becd7fdfd6dfdd66cd6bbead7fdd5e16dbb5dedbf4fab4dfd7e37ca47e181dfd6cf2f4df7c0f8fef675f55cfd5e357fbcb64f68ff1c9fdb795a6fabdd615defaef6d597bbd183ba7156754fe92c7faeabf743eff7abe3683ed7f5d7e31f9f9eee4693d1d5ffea7afbfbe36a53fde738844ddbe564723cd46a533d36c79657ed8f6fd5acdab4da2753b647f8dfaeb3eef7f3d11c5becff1eba5d76c1b4c7fd7975a866f5e6aff553f372372a46574fd597d5dba6f9ad7eff57e507ab47573e997f57dfaa4d6bef0eb1ede4b1de1cbaffaf3e578766b93e45f3f87668eaad6fb2fd7bbbfafb6e24da9feb5df7f3d07cdf54ed6fed81be7b93bcb6f9a494568766f146a46f44628d94d7b99a1871a109e59b50ffe438b46f44a38d986b51e85c5f3c14e35b31682b05ff64eb9f6cf1270f0f617c3a51dda99faf9ad5fdedbe7ef7ed9e4ff3e8ea74b6af8fa3df9f423eb57a785d1de7587ed376d6bcac1fbf4eebf324201b12aa6b455d6ca51de4d138f3cebcedb77dfcd03efeed5e88dbf1b7e3f1b7ffda9eb8e336d7a7c3d6c91d7a676e7b1d2a75eeb0332d82a9e84cbbd349392acba0e45e393e5d4f528f57a890b3493de08793b32dd0fe01ebe1014fbd299ff44d66689a0593ea9becd0340fa6bc7f4272908f3709d36fa91c9a96a125dd33f5a2ea4c2e9844df942379ee4f551f651662b23e26dd3b31a0b369f0989e4789d282d33f836d9d4fff3c2896ee65e13dbea451cf32c1e3425f05ea19245370c99c441d0d66ea059806a8ad19f5fcb917b82cbca564a2b86c71de921044c90571125534a9a75e28411070fe9c6c46444178216782f016ae262e5b9cb7a8cb411c57023a09af2235e1957c224118609d98914dcc83c2d545f0708591e071e7c34d89246723c9a9ea080a2c8f022642b530f78a9e7089788fe012b9ec71c173f102754c44b08908b24804be72943011aa857950d81a11093572d9e382a7bf7cb4604d448202d03912491689448ba498c048a816e65ee18b442614c9658f0b9e3c291294e6ce9128b24a145a25450e23a15a980785ad12955025973d2e78d2aa04e5cd73242755f5975030e8a9f7e4ba4f6c250411ef32368ec6f7c1e0ce2278a2672fa18206e23d2629109467cf819c54191dc8340f749b8322113009df44192701143409935024973dce7bd42429139657bd7a2e925e265e5120120923b1c312e84562138ac35e2692048f0b7d0dca84bce0b0a0ea55ac4cbc528048a2f95290555224544902ad26789cf70caa449055c222ab57b12a29f12a81f41e7c489594095552265c702e7b5ce8ab5f2582aa12c1b2ab57912a090aac12c8f1c117570954b0484402ba26789cf70caa445255225876f52a522541815502693ef8e22a810a1a4902bb26785ce8cb2445c2c2ab57b12a117895409c0f3ea44a44429524c06b82c7794f6295b0f0ead5019680cbec3478fa5b443a2a16495149783a5b2c92a212527141492b0c9657bd8a1586c20b03ded5041f52182aa130127835c1e3bc675818e48acaf2aa00bcda8b44a3cb4709ef6a04a0d15e24099cea3d2c8a24789c4088559155c212ab20893528a04a4a7857234860850a1a4902b026789c4080559155c202ab208155e0c05a42861724b042058dc4265c642e7b9c4080559355c202ab208155e0c05a42861724b042058d240158133c4e20c0aac92a61815590c01a14582590e1830fa99204601509c09ae071a12f93128964815592c02a71602d21c34b1258a1824522138035c1e32402ac74242cb04a00acddc50ba088f70c77480c5c66bd0b61119900aec113b308a93889402a1d030ba992845489436a096f652409a95041879f00a9091e27114835d4922a59489500527b910cd0f4231248a71230682f92043af51e9645123c4e22c46ac82a61895592c42a71622de1ad8c2489152a682409c49ae0711221564b56094bac92245649102b847849122b54d048128835c1e32442ac96ac1296582549ac1223d6f6ee0942bc2489152a68249e3499174197091e2711622dc82a61895592c42a31626d2389ae2e24b142058dc40eaf216824973d4e22c44a47c212ab24895562c4da4602215e92c40a15349222a14a2e7b9c4488958e8425560988b51b38649112639108d34a924512c835781016a1141794a4ca502ca52a92521546a96d65c07b19356051bf77048065ae1060856f545a78d3a0022ce86e9962720a61d6025d605fd64f4fd5ae7ba7d6fed42a93554e66950fb33a2bb3a00cd2d1309d3c4e4758984e3e1cf847a1908a0bcaa4a70c8b830555af222b6950e04a0aefea824fb3c317f13481afa02f82c932a62566ca75541d02993e969a3e2cb77a152b09894f1fb87a041f3f7d645c20707f76e14d839991c3fe96984be8024624910984460426108bb48a445aa5c809a4907c0a980fc2b3aa80f9287202518a53ead20462815591c0aa30606dcb03dee9298d4ca068f808bb42d32298fa7303eec22c3193d4025607c2af49d5c1a2ac57b1b0cc30ac5e7518249e12c663e2786474f131d47598545c500c591d2ca87a159b0e165f3ce04d6ff0f5278799c0e1db787268f8d6676f1a5e560b581d88a93d2c581df627d70e16611589b00a206caf3a8a389eb83a107e1551750038ed5507a538056035ae0e165015b9a51a14b876c0fb7f05f0f3034c4965a1007462a48e799032c02095baca6a16523509a99a805478dfafc9ad545259688434611498278e4263384a46c132a846b650e1a70234ba850aaf2c9adc420d7de8c1a0c04560115cf182492a2e28e482a9591ed5e4c6a9c6364ee524879b1d7ab03d4a2c981ad943151a0e5f24dcac60260defa09c46f65153164ccda2a926d1540334fd58303502a346c07810188dee5634c0cc5e75508ad3003a87d501c6ce82a626415393a0a911d034128e1d01cde863329a044d5271fa12686a163435099a1a07cd1cee79690434e3e1a780a6461812be3f6d8999347c338ed33f099a9a054d4d82a626415323a019cf0c0434e399418226a9387d0934350b9a9a044d8d83660eb7ff740a686a0434e3e163a0296075202603fb73fa274153b3a0a949d0d42468ea14d0d4186846f190a0492a4eb3a009c6ce32a757b1b197e4d8cb946b46198f3d8f168e921c3ba5b8a090eba661c9d2abc8521014b86ec2edcfe0631786a1c9df7b83d1074f7f45847bcd4bcc64219bb8e0fad165d3b0e869c8b79b06255e364d8ea403af2a06e14d787d5a18123749c5191637c1d859f234e44ea811e4d891bd4fa3e0d891bd4ff831df8511e4d829c519c18d7d7f7a85921930498f06dfd8cce1d6afc158321a3ec292f0b3c90b836c59c20fef2e51137cfdd7999fdcd7342c6e1a12370d899b06c3cd68ddc070338a87c44d5271e6126e1a16370d899b86c04db8ed6d00497edc7d42057bd1cc20f4086fcd310f5210c984790c85c54a43be141f143865a24fea932fc543050d25e1a578cc838482bd184f86c2a2a7012fc677650ef62bbc07ec57c0bd4eef42f62b421fc3fddde8fa0a5e72ef4d134a7141a1175116250d8992a6c02b221a740a589a14b034c8cbebd0b4c44c05dc0c75a6f891f26081d3909b9c41810b09dce40c3e642121373983c22e1f880789e24736392d8ba296dce4b4f826670e37392db9c9492a0b0b36303f6605a9380bb633a35961598eb42447da1c3de702eee2d99c3ae7a4b2b0243f928ab32c3f1e07ca42a325b72b2dbe5d09779266967c9f27a92cac20cf28a5382b2e9d5116162df9eecda0c0330af717820f39a394b2080a7246c94f1405853ea32ce85912f4acc2cf28bc5db48a3ca394b2b024e0918ab324e08d7bdf0cb5adf6cfddf78a1dae1eebb75deb94a3dea3a7af349ba91b77fa463328e89bb9c684a5be71fecba83e7ab8bf7d6afbfc73b559b73fd7f5eedce5f13b8f86d2d56ab3a9dfa79bd5ee6bf7ed638797fa7db1dfd7fb5faac361f55c75547e7cf0d3eef5ad193c78fa62b499bde9926ebebfb68f6fd687a6ede3f805716f9b557e3f7ac8b307913dc8ec41650f3a7b30d983cd1e8a6c9a6753914d653655d9546753934d6d362db2599ecd443693d94c65339dcd4c36b3d9ac18dd8ecf6dde8e8743881e389cbe43ee97d5fe79dd8efd73dd34f5b61d5df7cd505feabaa9f6c7bfdafa7ca9564fe73f36d597a673b5b721a7ef94ea7e6fead7f0dc63cae7afc8bbff3f504b03041400000008000c46544c38da0fb1ad080000c832000018000000786c2f776f726b7368656574732f7368656574352e786d6cb55b5b739bc812fe2b2aed732466988181b25d6529ba8074b6b6b27bce3e131bdbaa20a1051c27fbebcf0083024d338cb5d93c4448fd4d7fddd3dd73c5376f69f6257f89e362f2ed989cf2dbe94b519cfdf93c7f78898f513e4bcff1494a9ed2ec1815f26bf63ccfcf591c3d568d8ec99c5a96333f4687d3f4eea6faedb7ecee267d2d92c329fe2d9be4afc763947d5fc449fa763b25d3e6874f87e797a2fa617e77738e9ee3dfe3e2bf67d9407e9d5ff43c1e8ef1293fa4a749163fdd4eefa9bfa7bc6a5241fe7788dff2d6f3a4f4e6739a7e29bf048fb7536b3af93b4d8fbf3f4449fc6be94222292dab34354ee287a2d41cc98faff1324ea46c63cb16f95f1559f57cb1a6d4d87e6e68d755c748bb3f4779bc4c933f0f8fc5cbed544c278ff153f49a149fd2b76dac9c95a6ab9ed9c75fe344c2ab1e68fff6497593247e4893bcfa7ff2f09a17e951a996c263f4ed764ae5e7e1547de6c5f724964fde74f2a640d68c51ee0aa2ba6b508badb4d85d33ea50f5d5b219619633a69429a5cc4ca935e3ae658f9aca95566eaad5259667bb235a1da5d54195103325ae52e29a99c6678273e68831b542a9153fd5634f69f5063c360a06b19496f2c1c438774605277c34770869141353afcd3a93340543f08aa1edd49ed7c55795f8c7a888ee6eb2f44de9bd94f3745257f5aca4ce6afb6a9df9392ac752e2975cc5cbe1e1cb22bd8c76839a286b3451034dd5973fd273f945ba5d36bb57eda88c8904e5f2f7af77f6cdfc6be990c22c1b0c6d6188d7056d3010b5baa01005d10b682e1dd5f59b33ab9db551671b9794d46ebbe471e053036a5be200970c30a11e33e6d0251198d62325b579db2360c95281786dc9a90231ea0906bc6a707617e781808628ceb62cdbd83b51b9c6b5ae71cc3517b8c6074c06e9b541711d936bd78670ecdd99e8689d7330e70470cee9181357a05f7e9ddf03dfcc60a183bb4684b16b72d8ad7d73b5beb9886f0ce4da528158db1ade0b1b8a8243c708c82c1785d62525654e3b5ca02c960d48e8c365060bbbb0da2b47cc84ddfe873899d59331e2845769f42ca5b09ae04ac1420908142c958042c14725b0a1603524582b018382cd10c776485530a42a1c52b51b52b547548da40bf59a2228172b9a945162bbd7ab0b2511a43d695a20ab970daa33b55aa48bfaa8501eefa06817b56a4c151d1418fbd60da3dd41c14902b70b4ca2dbc67ba6630c8c18c306d5b51e4c72bb8691eb18f78d2e6f80f147f47bcbc5ac5e46ea425e8b6db7a31c4c590b8562a455d83dd452a184d34631e2c2f8d730cfd5c2568d655e0b66c1f02bc68e2a187ccc2a68fbd6802d30600b8dd876066c7b3ddb48d0f105f425e8b598757358c0a02b94ab0f7a8d12ac134dca61d06b98e76861ab8693eb82ae18b92ee89855fda08fb305066c21ce66c3a0236c1f188c3a4267cd3c873ac4119456eb44879ba6817e6ba1c4a0f63d98063656fb70bdae50b0f6194c031bad7d06d3c036a87ddba0f631aba0ed5b03b6c0802d3462db19b0edf56c2341d7efbe94b85bfbc482416748ed935ed01956fb9cc2a033acf6216cd5706a6b9f19d43e6615b47d6bc01618b085466c3b03b6bd9e6d24e8fa7da912772b9d1018746e54e91cad740b069da3956ec1a073834ae706958e59d5aff471b6c0802d3462db19b0edf56c2341d7efd79518543a854177b0591e6eeb150acef20e0cba83cef20e0cba6350e98e41a5635641dbb7066c81015ba830a4b369efd1ed144c1f752ddd48d4f527194a0c4add865177b152ef45ddc54a9df62675172b75085b3596694bdd352875ccaa7ed4c7d90203b6106383673e3b8cec031130ea089d054e476ce37d9dfef4478941f1339806029be6294c036136cd0bb3695e1814bf30287ecc2a68fbd6802d30600b15a65bfc1e857920903c80f7067b8c4fe601953523b8dbfc8f9f9391a1787b58d973186faf5ff6c2ed1de378488149b37a53bc87d47d1fb76a6cd316be6750f8885d3debb7066c81015b88b2d1de688fb07d6014461ce193bb3a4e5cca88ed7ab6dc2d326c573772d142f1f33cf32bb7962a83dbbb26d91456f48f651b2ddd633bb81cfe380073afe80183abc28bd974d0ec5ae274cd81d36183ea1cc4c1abc38f0ae5b62fec48af26c6748d7640edbd7e83afc42ed10e0a8d12de1e4991bbb6e505d81eb8caeb1838300c6984d70fab9ec6ee6976e9211b70adde2cb99dc35a0a7734b4b9f673ba86c0025d5e806e1768c3c3cb218d0e81ae0d68f4062e40ca137ad4d17a83e07606760a57f1b4b904147ab39617a0376896727440a3e8c5106a34b891286fb3b3fa032b5efd8885bc1691d59716efd6555d7ca2da0686952bb5e1657aad36fc80e75a6df8c9c1b5daf02d69a30d6d82ef67ae35005f161b68cbea59fceac6ec9a64be34be3a7bb37a917f7de3abb329ab97d5d737d6e7ca48e3abb3a66cfc4f92845d912436518df9d54982253bffa9631ed78f7968137de6a14df4f98636d16719dae4fde310d76714da64388fe6ad57e78e71f65cbd609b4f1ed2d7533dffb57eae5feeddb87ee0566d812074fd3d2ab817fe426082a5f0d7a86023fc001584c2dfe32d1c3f70d0168ebf47051bdb0f6cb485edef51c186fb01475b707f8f0a36cc0f18da82f97b54704ffd0545fb8afa6b54b0a17e800ac2f22d6c4c20773ffe92124c24773cfe0a17dddbfe02ed96a5edaf51c13df71768b72cb9bf4605f7cc5fa0ddb264fe1a1738fe1a0defbde32f7081eb2fd0345dbafeba16cc7f54825c3da6a7c743f9067a94d42f911787d373f3f2f996105feee4272bf9b9929f3bf9599ea7cb664f9f5e9378f2f8eda97cc15dc6213dc75954a4b21ce3bf5ea3643a396787343b14dfebb562f1fd1cdf4e1f2467502e9ecb17f95f93a83c11681ee55ab6d2097593b6eee72c8e8a38fbe3253a75189c7fc260b5199238cf7beaddf7a99fa39d3ad2d73be2f8e539c63bfbf6dfee5afaaff6acfd733ab6fccb8dff44d9f3e1944f3ea7859c6e25777536f194a6d2a9f29ba47a89a3c7cb97247e2a2a949c43eaa9b97a2eca5799ebb63ffe24e4f53c9106c7a7222ab96fa7e7342bb2e850d4e574f9e395bbff03504b03041400000008000c46544c5bcc5d8ff00400008e10000014000000786c2f736861726564537472696e67732e786d6c8d575153db3810fe2b3bdcf49e7a24310d851ecd8c71dc366d70d2c4f4a68fc251880e5b7225199a7f7f2bd90ed3accdf529f07dda6f77b5ab957c658c854a8a1f158f5425edfb93517076023f8b5c9af7273b6bcb778381c976bc60e654955c22b355ba6016ffd5f703536ace3666c7b92df241301c9e0f0a26e4c9e4ca88c9959da46ac3f620ccbbab819d5c0d1c58133771f4294c66513887e56a31bd8dd2d922817415465fe2d5f1625cf1398e522272cdf666a73487b0c702fe2036ebdbeb68913847e96245d8506bb6cf943cc66f97d3308da764fd52ab7f7966615d1505d37b2287697d9ba5df8ff1749162e25f6fc324ed606f9359ba3e025d49de999265fcfd09eeb9e1fa919f4c96f33049e229fcd6620ce616bdfed6daafe97758c537e12c99251f8f4d0e6e5f41b4b859cee334ee48dcf9ea5dd0934e5d359ad06429720e532d1e85bcefe20cd961a5b1a721adee38acd49381993496e539df1caf742cb1d62c7be0bab68c5451e6dc52cbe56c1ec37485154e3e9236639966059756b9b0f3bc23ee1b345fa78b2486751aae68773ff371d2d1794d0da6e16cfe1dc26f1f692fd735e85fe0e25fc32c41f7f3793cedb627561f16ab380ad79da7215e4571921e8a4e16cc178b2faea1c24f7148fcad38334a028e1758e3c4d954aee43c677b22e351be01aca8b620241c06c135fcc98af26f884e612deea5d88a8c490b1bf524ad2838a82db684ce76c29c52f7997ae47a0fcb9c49e2b2691f660586882aa56b3ac89ad6f82586904abfd8806d36eb8e6c98dc40f4daffe4d892ce33dbf01f15439f0593a57ac22ec51e33158aa36989b14bd4da3091ef81613eec9e93788e93b1f561b1eeb06817eb6fe6758383fbe5166ac629ea647851188cec10b59246a007fb2432ef67cd4bcb8bbb3a1f3c3b255425d81defce09b65a15301ed6f1a2c568383c84bda9d112b5f0fa3985e9af96aec1d0d929de4bc0ca52ab9f022f348e4b2e6abd81b7823037ea353ce760e049e9073cc9f024ec0e37e6c1a701753e77b9c202192c0e9798912b19eef2bd5bce73bc2334b662ee435412e782813bbe75dbba151271748b9be0cbe2aa42b79a673b26bdc42fd56b26153989cd9ed599e3e13f5ef00fe70fa4117113c828bc7669758edcfe8e3e4c4cf0f77f1fedcae67cf605df4387d53d8ccee02f707f04c32e3a18b5f4db4efa02696c013823ec88200119ed68f8a6111851f754f30d41c65d9aa3512b4a833e27085d73d129daa61a90283c3a467a810f1892b703838624ca0ebc6c2d49321e3d6fe880ec9f47cf5afab28b3e1b229da84720da0e3c6fc81191f6e8594b13698706ad7440f6d4a36f919ef28cb68603df34242dbb47472d4d8ae3d18b86a6a5f0e8b8f54c6af1994970daee97483bf0a2214744d9a3e3860e3a9583a0a5499d3dea0afd81df01d176e0b8214744daa3414b13698fb6d201a9b3475da16f98a69e1d386e48ead9a3414b13cf1ebd6c68ead9a3ce73586a7a2c0eb3ab73b2d523a76fb8acab3bbc472c4e6cbc708969662b1cee6ee0d52f81bea9d84640760c2f938c19fbc292838f9e4b215538cfa1eb419c54fe66c6b7c2ff8cfe5aa2f3493e15db2dd7ee723c665ef546ec5f4eeed1f6fc9c77cefb5ff26e719cf3477f3bbe10a7bfd668796b98cc951a2605ad61d29d354c1aab86c9d4a96172ac6b98346f247456094bbf789b8fa3eead6fbf674263f089951ff76df7d758fd1e256d26a4303bd2da5d1ddbc67add4744cfc4c0183bf90f504b03041400000008000c46544c489bd14c320a0000aad600000d000000786c2f7374796c65732e786d6ced9d6bcfdaca1180ff0ab2da6f4d7cb7710ba83d3448954eab48c9872335fd60b001ebd8981a93be9c5f5fafcdc51cd6b0d83bbbe337444a0266bdfbecccecec6dbc1eedf2431c7e5987613e784be2cd6eacacf37cfb6755dd2dd661e2ef3ea6db7053fcb24cb3c4cf8bafd94add6db3d00f76e4a624560d4d73d4c48f36ca64b4d927b324df0d16e97e938f15eb7c6950dd3f4d8370acfcfb0f1f2ccdfb4ff0ed439224df3e1c0e7ff9ab32a8d2fd23182bba632903957a67a206ea6d72bb29b9f651fbe37552a729e99129214483e0db9fbe0d0e87db92dcf276f558cdc968996e2eb5d50da5ba5214e027e1e0bb1f8f95a91f47f32c2aef5bfa49141faaeb46796591c66936c80b4917087a7969f75b95403f7e256a38e695449b34ab08aa621017363f668cb864475ac916ef92a5188da14913a021b26d702fec9cf3506435b817f68c80caff88c38ce2f8e23075a5ba32196dfd3c0fb3cdacf852dd555ebdfdedf8f9eb615b547095f907ddb015f63b76691c05a4d0d5b49454b69a8f95d9cc33feaed99535cf8fbf449b207c0b0ba77fec8cd45a9e6d4b3beaa528288f48fd3f681f0dcbf35c57277fdca167ca40d00b046f68b996e65ab6e1183218cc8261e8188ee3b89a6bda43510ce68941fbe81229e8ce7038f42c53b72c5108fa054196269c0b825910b8b63db475cfb08abf1210ec02c133879e6314fad02c61b6d0a2fd97ff155e6d9e6641989dfd9aed2aa76b93511c2e73924116add6e5873cdd9605a5799e26e45310f9ab74e3578eef74dbd5ede5207dace4eb72905d39797f9fa7271faf9254a7228e89933088f6093d7999b02261485d243be33e24a9d23d51a97b2553aad55cf26da59ad3c25609504fb2aa84454bf73850e849ed9912da792258927e48ee29f365126e732fc1d5fa554e96cdb52db26a48edd26d49959f4c64f86620b35a78c6453006d6173dc0b6e1e75c28a8b6c106edef6e74db9b9e5f50978ba9fbbacb7233ff6d6bff8ff2bdab041e6dfea6c4cea3df2bf364a910d37d8f5aedcd0d5ddb421fc81b8c55b624e12d00d41e0599fd7dbfcec32a98f27dd075a2361ff00a02bb72a43ccf7476c01e0dbe91741a73f0188ab138715e63edc5af5083eda69c51cd6edf699d9a38b1558ac5fa24748e0ce2839c833d2718d97d743bf9c99f94b7f57c7d1b2ff1761762f5d5dc1722775b581674006c0104b7d3a0077a3919a881c85ffeeecb980662d7bff55cfec7da07ea341d92ce2ba63d1e3fec8a3bc338fe4272fb65798e6f2271ee6fcb41958604c66bca8044429d3ea69b2a5cbe1e3b5f4557b5bb4bad435448751a4763e3d17e97f336fa9ee63fed0b316ccaefffdda779f8390b97d15bf9fd6d7905ee6fb7f1e16f71b4da246119bdaa80953819f9a77206ffcbfcedd7f02d3f2bee6df9bbda1a10b5bd646fc2664fe292df8db2d66916fd56e44762a017c585305306dfc32c8f16f52b352ddee524d1fc2750030eb474335d380d4308270781ba7d01a5370a83036807358331f54678ef0cb4a96fb94b4def0f9043f3ed23859bc415a8d917d0de4854470c7a351ef6584175f1a0363ad58be9b0ba0f9fecc79ce491510402a5936a2f526052c4a0f8865586d59751bed61750b8cefef1f206dfd97acfd6072e50ae7031302cfc94477520b04f8605082ea8645db6936be2ab459686745fc50c9d0f58c366e9f99e3769eaf0cf12de629a4a14d762e8ee9b9f249eaa76273ddab0f96bc0f83fb6e3865ee917b65101e3ae4a457ece8a348b3c22b7802e5b6dcf050dd6511084557971baf8350c183a8efbb028cceee91a365687fba0971f1a5f4be749c6b991f044e33daaff11c8f80ea1c4f91f79a32f18ff2347f85d248dc0ff2043e33bcc046e4b02577c40eb01b7ef27b61ae2e6e9b2878838aa210299d354ca859db34264af43c79459c0f903af5cd5e2be8600d9bb8fb32f0f556e5d800d5d40cd7e3c58f36fca1e9c9f5b01101664085430cf0298f70d39bbfaf63b0626efc961c71d034bfc8ec17d1e47e20e066761dcb40296ca318704d1f2075e59aff337e5ff3cff7d7b10bf557d9fc7c3c563d4542220e680594c62633698b1ccc7581c8373da699421a85d36238b7a65339abac49e8473e1b7e3291dc2d377de85141a3dc2b22aa173d13cb7c587de4459db2816dfb9a1729069cbb0e0fb968a43cca04b8408d4c36fcd9f77b817ace4dfd9fe3def91373f34e99be48dfd0d5ce3eb10dd6909f1081c7a1638504e8fc1018af249c2e6c198f66a1c6dd56bf3defd0650afcc9012300ca6603ea955bf8f2633d4048ae2660e2cfea0091b4548a4ec9e01f0b16e40970c480d384e80a486eb5cba5183cd1d6f57d14062f99ff317bc7b25eef3ed76bebfe1ac1b7299534c05fd19b1ae05f46b09b4710f812e7da847fa1f3de7c96107e846ff1e6cf63adf7db5db880b86471c3be5cfb0d3d5297f10f5763e50a37c23bcfc233530390a7a78008f8d1116a5c13d20cb79bc0cb7afdf9b67f7459cd6828fb341a0263a50ba53e90b676f148f703887a93b0179f4049c9e3289d12e9318ad5b0d31a8a76305a96ebb36aeb350b75ed4a0f481383ecefa8cc1c4ecb7b59e70d6e3cf7183d2358fef0040bae6f17136681e2128dd3919d2d78059cd400a741b33c00d4a5d32bee2b49e88eb177366216e52ceeb87bc02e0051fedce2c2db107b977748fb2b1e8fe4f3695e0633a99b1704a8beff605b77688535806fdb939841d297db91b1f287d4dc6017a7ea73d275df1f838e97ac7c769f445f1067d3f061f68437c2b3e50fa7ecc15278ad7113058280ace86337c1082f646a23de1ac2f3ddb1750171fa8d717d09a441d38d0ceaff668d8cb1a72e66c3a96bc5d4c2d9d99b76cb93237f8d621e771345f66fa18103573c363eaa8996bbd446d6d1de11260dd88719336eca522df06904ecd71448be21d700c936d149c0c936d149c2c036f1ca00c936d14a02c936d14a0f4a3e7f04d656c86368f0294f7f324dc56cce91b6af2b9e8f2f264afe4e3c46ad0a26cac066961352e018f17217deaa98d71c9c6b2e97d29d90294cb459f93cac632c5c69b324b8b6e5cb2b14cfafeb66c2c4bc389450f7f918e459796ec96a8e3741075378f08cb843b05bb1316dc39cf9d4c5eac6d617bc927bf0362c53686ce4727233241c077caf23a3ab9094b775cd93a65109e7c4a8bc12723a014ad71b44a46ab579eaa94ee8ec5fa3db0862b9bd114ab6b66ac1e776b3d6819b219995c9f64c61e1d2083b6ef45330ca46e07f7f4f567b5c9524fdf4f66408b08e20562ea228ce35f96bbc9887cf8921fe2703758a47b62f48652bb3a98efa3388f36a722fd241c2bff4ab3c48faf73a4de619feef81c66c4aa2ffee30c51953d19056fcb3341e151cb0b9311a96d91771aa7d9205bcdc7ca6ce64d354d73aa0caa9f897426a3ad9f17ad66332bbfcc57d3fa3db3d9d49d7eaaeeb94aa756f7aa6561cd253ab6a63d5be2a79fbc69db128b0aeacf9638753ecdbad4f125558e52cdd72131fbabc2d0c04953394e05bc92bed3a4af960558c797545ffeea95f4e5af7adcb2c8bfc5cc23f7e771783d052a1207e1d2dfc7f96732a92a7f2c2631e7cf3f93a7a9c83927c7545fcf598c95cbe77f8641b44f8caae01db9f2651d86f9e4ff504b03041400000008000c46544c010a4fdd8a010000900300000f000000786c2f776f726b626f6f6b2e786d6c8d926d4fc23010c7bf4a6d96f8cec204d4054810a221314a90f896dcb69b6be8c36c0be8b7b7dbb2b88921beba5eefeef7ef5d6f7cd466176bbd239f52281b9909cd9d2b22c66c92a3047ba50b543e966923c179d7bc339d653cc1854ef612956361af3762060538ae95cd7961694dfb0fcb160621b539a293a24649e08a4ec7cdcb5686b0e9b83cbd713cda9f40e912481c3fe006e209edd13291b5322b6c6389028913fa724073282befe1cbe6da20995152252cd309edfbb303e7f30edcf258202526e23e609669bfe2b7592b2e902c95af1075f72d527886149e9036da7cec916cf63192b53eda868a690b797d06797d8a3490ecd0d4b8b9968540d7c10dcee00627b8352650b4aa8767aa87f54f34e34f31e30ad367cfe97a24e7698aaa1abbd00988d7d63fd4b2db4fa1e4d5f6810b8766010e62b048a79727a3bfbc0866c1280a1e83f07634662d95ae6457a7d7d55919aedc76e657d24bfcb12995483f0a96c1cde09706eb76e94512bfb9a5a9fa0907c3fe1d25d95e88b9bf7b514f1aea3ecb49352b3dfd06504b03041400000008000c46544ce328301ed9000000d10400001a000000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73bdd44d0e82301005e0ab901ec051fc8d11566ed8aa176860a044689bce18f1f636dd80891217844d9b669af7be4d7bba6023b9369a546d29eada46532214b33d0250aeb095b43016b59f94c6b592fdd15560657e971542bc5ceec00d33447a1a664659910897152b11dda4ab9013015d034fe3eea41099206cab852ff0575e16ffa9376559e77836f9a345cd5f147d8188e0bb281e17c5f38bd6e3a2f5fca2cdb86833bf683b2edace2fdaf52252d261716557eb8aa6967c84ffd4ec071a7e35383d23a4feec3ff4fdec5b10c23af9f30ea901011f3f58fa06504b03041400000008000c46544c6a0b987e3401000084060000130000005b436f6e74656e745f54797065735d2e786d6ccd95cb6ec23010457f25cab62206fa5854c0a6edb6456a7fc0b52789855ff20c14febe1343918a52890a90d8c4b1efcc9d6367e44c3e3611b0583beb715ab644f15108542d38895588e059a9437292789a1a11a55ac806c478387c102a78024f03ea3ccad9e4196ab9b4543c6dd73beb692963b4464932c18b95d707a6839d6195c0e6186c4dc41b0e288b9735bb20af4d4b56b12cc411250e33f39c13df569092d1f02fb850d746810e6ae938a5c298406a6c01c8d90a5b9940bf5332bed911cf65a257e9d858acadf815505d10843616fa09b272d6d2c4ad017db5b2b07d8e4eabf8d3122a2418c4c46a22d3b341669ab38aa20b3ceb26a1eb1f0dfaa8ea6c7dc18ffb15d222bff79df95e449187130ffe7c20e36b01b9bd1690bb6b01b9bfe44dd48d9593c6ff45f219c2620f20f2cf67f60d504b010214001400000008000c46544c3ce1a585c0000000160200000b00000000000000000000008001000000005f72656c732f2e72656c73504b010214001400000008000c46544c66f30b6082000000b10000001000000000000000000000008001e9000000646f6350726f70732f6170702e786d6c504b010214001400000008000c46544c5e87f2c5280100003c020000110000000000000000000000800199010000646f6350726f70732f636f72652e786d6c504b010214001400000008000c46544c83afeae3d3050000e31b00001300000000000000000000008001f0020000786c2f7468656d652f7468656d65312e786d6c504b010214001400000008000c46544c51d0fe119e0b0000c04f00001800000000000000000000008001f4080000786c2f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000c46544ce6ce3522a92600003b5301001800000000000000000000008001c8140000786c2f776f726b7368656574732f7368656574322e786d6c504b010214001400000008000c46544c295c48de880c0000f15300001800000000000000000000008001a73b0000786c2f776f726b7368656574732f7368656574332e786d6c504b010214001400000008000c46544c1dc0f855330c00002e4f0000180000000000000000000000800165480000786c2f776f726b7368656574732f7368656574342e786d6c504b010214001400000008000c46544c38da0fb1ad080000c83200001800000000000000000000008001ce540000786c2f776f726b7368656574732f7368656574352e786d6c504b010214001400000008000c46544c5bcc5d8ff00400008e1000001400000000000000000000008001b15d0000786c2f736861726564537472696e67732e786d6c504b010214001400000008000c46544c489bd14c320a0000aad600000d00000000000000000000008001d3620000786c2f7374796c65732e786d6c504b010214001400000008000c46544c010a4fdd8a010000900300000f00000000000000000000008001306d0000786c2f776f726b626f6f6b2e786d6c504b010214001400000008000c46544ce328301ed9000000d10400001a00000000000000000000008001e76e0000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73504b010214001400000008000c46544c6a0b987e34010000840600001300000000000000000000008001f86f00005b436f6e74656e745f54797065735d2e786d6c504b0506000000000e000e00980300005d7100000000	2018-02-20 08:48:25.78
+\.
+
+
+--
+-- TOC entry 3095 (class 0 OID 16744)
+-- Dependencies: 222
+-- Data for Name: incident_classes; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY incident_classes (id, name) FROM stdin;
+1	Assault or violent act
+2	Caught in, under or between
+3	Confined space
+4	Cut, puncture, scrape
+5	Explosions or burns
+6	Exposure electrical
+7	Falls from height
+8	Overexertion/strain
+9	Pressure release
+10	Slips and trips
+11	Struck by
+12	Water related, drowning
+13	Other
+\.
+
+
+--
+-- TOC entry 3096 (class 0 OID 16751)
+-- Dependencies: 223
+-- Data for Name: incident_types; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY incident_types (id, name) FROM stdin;
+1	Site Visit
+2	Near Miss
+3	OSHA Recordable
+4	Lost Time
+\.
+
+
+--
+-- TOC entry 3097 (class 0 OID 16758)
+-- Dependencies: 224
+-- Data for Name: incidents; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY incidents (id, date, contractor_id, incident_type_id, incident_class_id, project_id) FROM stdin;
+1	2017-09-01	1	1	1	1
+2	2017-08-15	1	2	2	1
+\.
+
+
+--
+-- TOC entry 3098 (class 0 OID 16762)
+-- Dependencies: 225
+-- Data for Name: indirect_costs; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY indirect_costs (id, actual_amount, planned_amount, project_id) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3099 (class 0 OID 16765)
+-- Dependencies: 226
+-- Data for Name: installations; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY installations (id, item_id, date_installed, units_installed, units_failed) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3100 (class 0 OID 16769)
+-- Dependencies: 227
+-- Data for Name: invoices; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY invoices (id, activity_id, amount, date_invoiced) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3101 (class 0 OID 16772)
+-- Dependencies: 228
+-- Data for Name: issue_statuses; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY issue_statuses (id, name) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3102 (class 0 OID 16779)
+-- Dependencies: 229
+-- Data for Name: issues; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY issues (id, name, responsible, description, status, resolution, deadline, updated_by, updated, activity_id, issue_status_id) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3103 (class 0 OID 16786)
+-- Dependencies: 230
+-- Data for Name: items; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY items (id, name) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3104 (class 0 OID 16789)
+-- Dependencies: 231
+-- Data for Name: locations; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY locations (id, street, city, state, country, latitude, longitude) FROM stdin;
+1	9806 S Ohio Ave	Cantua Creek	CA	US	36.582838500000001	-120.4024749
+\.
+
+
+--
+-- TOC entry 3105 (class 0 OID 16796)
+-- Dependencies: 232
+-- Data for Name: milestones; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY milestones (name, actual, planned, contract, project_id, phase_id, id) FROM stdin;
+Circuit Substantial - Circuit 1	\N	2017-12-03	2017-12-03	1	\N	1
+Circuit Substantial - Circuit 2	\N	2017-12-03	2017-12-03	1	\N	2
+Circuit Substantial - Circuit 3	\N	2017-12-03	2017-12-03	1	\N	3
+Circuit Substantial - Circuit 4	\N	2017-12-03	2017-12-03	1	\N	4
+Circuit Substantial - Circuit 5	\N	2017-12-03	2017-12-03	1	\N	5
+Circuit Substantial - Circuit 6	\N	2017-12-03	2017-12-03	1	\N	6
+Circuit Substantial - Circuit 7	\N	2018-03-01	2018-03-01	1	\N	7
+Design Approved	\N	2018-03-01	2018-03-01	1	2	8
+\.
+
+
+--
+-- TOC entry 3106 (class 0 OID 16803)
+-- Dependencies: 233
+-- Data for Name: ncrs; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY ncrs (id, project_id, contractor_id, description, date_open, date_closed) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3107 (class 0 OID 16810)
+-- Dependencies: 234
+-- Data for Name: phases; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY phases (name, scheduled_start, scheduled_end, actual_start, actual_end, id) FROM stdin;
+Origination	\N	\N	\N	\N	1
+Engineering	\N	\N	\N	\N	2
+Procurement	\N	\N	\N	\N	3
+Construction	\N	\N	\N	\N	4
+Commissioning	\N	\N	\N	\N	5
+\.
+
+
+--
+-- TOC entry 3108 (class 0 OID 16818)
+-- Dependencies: 235
+-- Data for Name: portfolio_projects; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY portfolio_projects (id, portfolio_id, project_id) FROM stdin;
+1	1	1
+\.
+
+
+--
+-- TOC entry 3109 (class 0 OID 16822)
+-- Dependencies: 236
+-- Data for Name: portfolios; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY portfolios (id, name) FROM stdin;
+1	Test
+3	Signal Energy Constructors
+\.
+
+
+--
+-- TOC entry 3110 (class 0 OID 16829)
+-- Dependencies: 237
+-- Data for Name: procurements; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY procurements (id, name, date_needed, date_delivered, project_id) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3111 (class 0 OID 16836)
+-- Dependencies: 238
+-- Data for Name: projects; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY projects (id, name, start, "end", workdays, budget, bundle_title, location_id, contingency) FROM stdin;
+1	RE Tranquality 1	2017-08-21	2018-01-30	[1,2,3,4,5]	1000000	Blocks	1	\N
+6	Bayshore A	2017-08-01	2017-10-31	\N	\N	\N	\N	\N
+7	Bayshore B	2017-08-01	2017-10-31	\N	\N	\N	\N	\N
+8	Bayshore C	2017-08-01	2017-10-31	\N	\N	\N	\N	\N
+\.
+
+
+--
+-- TOC entry 3112 (class 0 OID 16843)
+-- Dependencies: 239
+-- Data for Name: units; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY units (id, name) FROM stdin;
+1	feet
+2	sq ft
+3	units
+4	Piles
+5	Rows
+\.
+
+
+--
+-- TOC entry 3113 (class 0 OID 16850)
+-- Dependencies: 240
+-- Data for Name: variance_reasons; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY variance_reasons (id, variance_id, comment, created, updated) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3114 (class 0 OID 16857)
+-- Dependencies: 241
+-- Data for Name: variances; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY variances (id, activity_id, reported_date, updated_date) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3115 (class 0 OID 16861)
+-- Dependencies: 242
+-- Data for Name: weightings; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY weightings (id, score, weighting) FROM stdin;
+\.
+
+
+--
+-- TOC entry 3136 (class 0 OID 0)
+-- Dependencies: 197
+-- Name: activities_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('activities_id_seq', 19, true);
+
+
+--
+-- TOC entry 3137 (class 0 OID 0)
+-- Dependencies: 198
+-- Name: activity_data_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('activity_data_id_seq', 2239, true);
+
+
+--
+-- TOC entry 3138 (class 0 OID 0)
+-- Dependencies: 199
+-- Name: bundle_activities_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('bundle_activities_id_seq', 9, true);
+
+
+--
+-- TOC entry 3139 (class 0 OID 0)
+-- Dependencies: 200
+-- Name: bundle_activities_id_seq1; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('bundle_activities_id_seq1', 14, true);
+
+
+--
+-- TOC entry 3140 (class 0 OID 0)
+-- Dependencies: 201
+-- Name: bundle_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('bundle_id_seq', 18, true);
+
+
+--
+-- TOC entry 3141 (class 0 OID 0)
+-- Dependencies: 202
+-- Name: bundle_phases_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('bundle_phases_id_seq', 7, true);
+
+
+--
+-- TOC entry 3142 (class 0 OID 0)
+-- Dependencies: 203
+-- Name: contractors_id_seq1; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('contractors_id_seq1', 5, true);
+
+
+--
+-- TOC entry 3143 (class 0 OID 0)
+-- Dependencies: 204
+-- Name: incidents_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('incidents_id_seq', 3, true);
+
+
+--
+-- TOC entry 3144 (class 0 OID 0)
+-- Dependencies: 205
+-- Name: locations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('locations_id_seq', 2, false);
+
+
+--
+-- TOC entry 3145 (class 0 OID 0)
+-- Dependencies: 206
+-- Name: milestones_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('milestones_id_seq', 9, true);
+
+
+--
+-- TOC entry 3146 (class 0 OID 0)
+-- Dependencies: 207
+-- Name: new_table_0_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('new_table_0_id_seq', 6, true);
+
+
+--
+-- TOC entry 3147 (class 0 OID 0)
+-- Dependencies: 208
+-- Name: new_table_0_id_seq1; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('new_table_0_id_seq1', 14, true);
+
+
+--
+-- TOC entry 3148 (class 0 OID 0)
+-- Dependencies: 209
+-- Name: new_table_0_id_seq2; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('new_table_0_id_seq2', 2, false);
+
+
+--
+-- TOC entry 3149 (class 0 OID 0)
+-- Dependencies: 210
+-- Name: new_table_1_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('new_table_1_id_seq', 2, false);
+
+
+--
+-- TOC entry 3150 (class 0 OID 0)
+-- Dependencies: 211
+-- Name: phases_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('phases_id_seq', 6, true);
+
+
+--
+-- TOC entry 3151 (class 0 OID 0)
+-- Dependencies: 212
+-- Name: portfolio_projects_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('portfolio_projects_id_seq', 2, true);
+
+
+--
+-- TOC entry 3152 (class 0 OID 0)
+-- Dependencies: 213
+-- Name: portfolios_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('portfolios_id_seq', 3, true);
+
+
+--
+-- TOC entry 3153 (class 0 OID 0)
+-- Dependencies: 214
+-- Name: projects_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('projects_id_seq', 8, true);
+
+
+--
+-- TOC entry 2896 (class 2606 OID 16869)
+-- Name: activities activities_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY activities
+    ADD CONSTRAINT activities_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2898 (class 2606 OID 16871)
+-- Name: activity_data activity_data_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY activity_data
+    ADD CONSTRAINT activity_data_pkey PRIMARY KEY (id, activity_id);
+
+
+--
+-- TOC entry 2900 (class 2606 OID 16873)
+-- Name: bundle_phases bundle_phases_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY bundle_phases
+    ADD CONSTRAINT bundle_phases_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2902 (class 2606 OID 16875)
+-- Name: bundles bundle_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY bundles
+    ADD CONSTRAINT bundle_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2906 (class 2606 OID 16879)
+-- Name: contractors contractors_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY contractors
+    ADD CONSTRAINT contractors_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2912 (class 2606 OID 16885)
+-- Name: incidents incidents_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY incidents
+    ADD CONSTRAINT incidents_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2926 (class 2606 OID 16899)
+-- Name: locations locations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY locations
+    ADD CONSTRAINT locations_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2928 (class 2606 OID 16901)
+-- Name: milestones milestones_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY milestones
+    ADD CONSTRAINT milestones_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2940 (class 2606 OID 16913)
+-- Name: units new_table_0_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY units
+    ADD CONSTRAINT new_table_0_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2904 (class 2606 OID 16877)
+-- Name: change_orders new_table_0_pkey1; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY change_orders
+    ADD CONSTRAINT new_table_0_pkey1 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2942 (class 2606 OID 16915)
+-- Name: variance_reasons new_table_0_pkey10; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY variance_reasons
+    ADD CONSTRAINT new_table_0_pkey10 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2910 (class 2606 OID 16883)
+-- Name: incident_types new_table_0_pkey11; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY incident_types
+    ADD CONSTRAINT new_table_0_pkey11 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2908 (class 2606 OID 16881)
+-- Name: incident_classes new_table_0_pkey12; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY incident_classes
+    ADD CONSTRAINT new_table_0_pkey12 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2936 (class 2606 OID 16909)
+-- Name: procurements new_table_0_pkey2; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY procurements
+    ADD CONSTRAINT new_table_0_pkey2 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2916 (class 2606 OID 16889)
+-- Name: installations new_table_0_pkey3; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY installations
+    ADD CONSTRAINT new_table_0_pkey3 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2930 (class 2606 OID 16903)
+-- Name: ncrs new_table_0_pkey4; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY ncrs
+    ADD CONSTRAINT new_table_0_pkey4 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2946 (class 2606 OID 16919)
+-- Name: weightings new_table_0_pkey6; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY weightings
+    ADD CONSTRAINT new_table_0_pkey6 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2922 (class 2606 OID 16895)
+-- Name: issues new_table_0_pkey8; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY issues
+    ADD CONSTRAINT new_table_0_pkey8 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2944 (class 2606 OID 16917)
+-- Name: variances new_table_0_pkey9; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY variances
+    ADD CONSTRAINT new_table_0_pkey9 PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2920 (class 2606 OID 16893)
+-- Name: issue_statuses new_table_1_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY issue_statuses
+    ADD CONSTRAINT new_table_1_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2914 (class 2606 OID 16887)
+-- Name: indirect_costs pk_indirect_costs_id; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY indirect_costs
+    ADD CONSTRAINT pk_indirect_costs_id PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2918 (class 2606 OID 16891)
+-- Name: invoices pk_invoices_id; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY invoices
+    ADD CONSTRAINT pk_invoices_id PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2924 (class 2606 OID 16897)
+-- Name: items pk_items_id; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY items
+    ADD CONSTRAINT pk_items_id PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2932 (class 2606 OID 16905)
+-- Name: portfolio_projects portfolio_projects_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY portfolio_projects
+    ADD CONSTRAINT portfolio_projects_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2934 (class 2606 OID 16907)
+-- Name: portfolios portfolios_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY portfolios
+    ADD CONSTRAINT portfolios_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2938 (class 2606 OID 16911)
+-- Name: projects projects_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY projects
+    ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
+
+
+-- Completed on 2018-02-20 09:46:38
+
+--
+-- PostgreSQL database dump complete
+--
+
